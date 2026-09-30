@@ -1,0 +1,6 @@
+{
+  "name": "CampusIQ - RAG College Information Assistant",
+  "description": "Intelligent RAG-based college assistant helping students find verified information across notices, circulars, syllabi, and official university documents.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
