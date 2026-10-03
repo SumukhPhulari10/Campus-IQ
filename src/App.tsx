@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AuthUser, CollegeDocument, Notice, NoticeCategory, DeadlineItem } from './types';
+import { daysUntil } from './lib/dateUtils';
 import { Header }           from './components/Header';
 import { Footer }           from './components/Footer';
 import { StudentDashboard } from './components/StudentDashboard';
@@ -192,34 +193,27 @@ function AppShell({
     const list: DeadlineItem[] = [];
     const seenTitles = new Set<string>();
 
-    const calcDaysAndUrgency = (dateStr: string, manualUrgency?: string) => {
-      let daysRemaining = 5;
-      try {
-        const targetDate = new Date(dateStr);
-        if (!isNaN(targetDate.getTime())) {
-          const now = new Date();
-          const targetMidnight = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
-          const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-          const diffMs = targetMidnight.getTime() - nowMidnight.getTime();
-          daysRemaining = Math.round(diffMs / (1000 * 60 * 60 * 24));
-        }
-      } catch {
-        daysRemaining = 5;
-      }
+    const calcDaysAndUrgency = (dateStr: string) => {
+      // Use robust parser — handles "2nd October", "Oct 04, 2026", ISO dates, etc.
+      const days = daysUntil(dateStr);
+      // If date is unparseable, treat as far future (won't appear in Upcoming Deadlines
+      // since we only add items with daysRemaining >= 0, and null → we skip below)
+      const daysRemaining = days ?? 999;
 
+      // Urgency is always based on actual days remaining — never from the DB field
       let calculatedUrgency: 'high' | 'medium' | 'normal' = 'normal';
-      if (daysRemaining <= 3 || manualUrgency === 'urgent') {
+      if (daysRemaining <= 3) {
         calculatedUrgency = 'high';
-      } else if (daysRemaining <= 7 || manualUrgency === 'high') {
+      } else if (daysRemaining <= 7) {
         calculatedUrgency = 'medium';
       } else {
         calculatedUrgency = 'normal';
       }
 
-      return { daysRemaining, calculatedUrgency };
+      return { daysRemaining, calculatedUrgency, parseable: days !== null };
     };
 
-    // 1. Process notices with real action dates (STRICTLY filter out generic academic calendar document)
+    // 1. Process notices with real action dates — ONLY include FUTURE/TODAY events
     for (const n of notices) {
       if (!n.actionRequiredDate || n.actionRequiredDate.trim().length === 0) continue;
       const t = n.title.toLowerCase();
@@ -228,8 +222,10 @@ function AppShell({
       const cleanTitle = n.title.replace(/^([📢🎉📅]\s*)+/, '').trim();
       const normKey = cleanTitle.toLowerCase();
       if (!seenTitles.has(normKey)) {
+        const { daysRemaining, calculatedUrgency, parseable } = calcDaysAndUrgency(n.actionRequiredDate);
+        // Skip past events and unparseable dates from the deadlines timeline
+        if (!parseable || daysRemaining < 0) continue;
         seenTitles.add(normKey);
-        const { daysRemaining, calculatedUrgency } = calcDaysAndUrgency(n.actionRequiredDate, n.urgency);
         list.push({
           id: `dl_${n.id}`,
           title: cleanTitle,
@@ -242,25 +238,24 @@ function AppShell({
       }
     }
 
-    // 2. Process exam deadlines from calendar (ONLY exam deadlines, no general academic calendar events)
+    // 2. Process exam deadlines from calendar — ONLY upcoming/today exams
     for (const ex of calendarExams) {
       const cleanTitle = (ex.title || '').replace(/^([📢🎉📅]\s*)+/, '').trim();
       const normKey = cleanTitle.toLowerCase();
       if (!seenTitles.has(normKey)) {
         const { daysRemaining, calculatedUrgency } = calcDaysAndUrgency(ex.eventDate || ex.dateStr);
-        // Only include upcoming / current exams
-        if (daysRemaining >= 0) {
-          seenTitles.add(normKey);
-          list.push({
-            id: `dl_exam_${ex.id}`,
-            title: cleanTitle,
-            dateStr: ex.dateStr || ex.eventDate,
-            daysRemaining,
-            urgency: calculatedUrgency,
-            category: 'Exams',
-            description: ex.description || cleanTitle,
-          });
-        }
+        // Only include upcoming / current exams (today = 0 days remaining is still valid)
+        if (daysRemaining < 0) continue;
+        seenTitles.add(normKey);
+        list.push({
+          id: `dl_exam_${ex.id}`,
+          title: cleanTitle,
+          dateStr: ex.dateStr || ex.eventDate,
+          daysRemaining,
+          urgency: calculatedUrgency,
+          category: 'Exams',
+          description: ex.description || cleanTitle,
+        });
       }
     }
 

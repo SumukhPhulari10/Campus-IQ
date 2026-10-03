@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Notice, NoticeCategory, DeadlineItem } from '../types';
+import { isDatePast } from '../lib/dateUtils';
 
 interface CollegeNoticesProps {
   notices: Notice[];
@@ -115,14 +116,20 @@ export const CollegeNotices: React.FC<CollegeNoticesProps> = ({
               </div>
             ) : (
               filteredNotices.map((notice) => {
-                const isUrgent = notice.urgency === 'urgent' || notice.urgency === 'high';
+                // Check if the event date/deadline has already passed (robust parser handles "2nd October" etc.)
+                const isDatePastFlag = isDatePast(notice.actionRequiredDate);
+                const isUrgent = (notice.urgency === 'urgent' || notice.urgency === 'high') && !isDatePastFlag;
                 const isScholarship = notice.category === 'Scholarships';
                 const hasPoster = !!(notice.imageUrl || notice.fileUrl);
 
                 return (
                   <div
                     key={notice.id}
-                    className="bg-white rounded-3xl p-6 sm:p-7 shadow-xs border border-[#bfc9c3]/30 hover:border-[#80bea6] hover:shadow-md transition-all flex flex-col justify-between"
+                    className={`bg-white rounded-3xl p-6 sm:p-7 shadow-xs border transition-all flex flex-col justify-between ${
+                      isDatePastFlag
+                        ? 'border-[#bfc9c3]/20 opacity-80'
+                        : 'border-[#bfc9c3]/30 hover:border-[#80bea6] hover:shadow-md'
+                    }`}
                   >
                     <div>
                       {/* Top Badges */}
@@ -130,7 +137,9 @@ export const CollegeNotices: React.FC<CollegeNoticesProps> = ({
                         <div className="flex items-center gap-2">
                           <span
                             className={`text-[10px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-full flex items-center gap-1 ${
-                              isUrgent
+                              isDatePastFlag
+                                ? 'bg-[#e5eeff] text-[#9ca8a3]'
+                                : isUrgent
                                 ? 'bg-[#ffdad6] text-[#ba1a1a]'
                                 : isScholarship
                                 ? 'bg-[#b0f0d6] text-[#003527]'
@@ -138,6 +147,7 @@ export const CollegeNotices: React.FC<CollegeNoticesProps> = ({
                             }`}
                           >
                             {isUrgent && <span className="material-symbols-outlined text-[12px]">priority_high</span>}
+                            {isDatePastFlag && <span className="material-symbols-outlined text-[12px]">event_available</span>}
                             {notice.category}
                           </span>
                           <span className="text-xs text-[#707974] font-medium">• {notice.department}</span>
@@ -147,12 +157,19 @@ export const CollegeNotices: React.FC<CollegeNoticesProps> = ({
                               Poster Attached
                             </span>
                           )}
+                          {isDatePastFlag && (
+                            <span className="text-[9px] font-bold bg-[#e5eeff] text-[#9ca8a3] px-2 py-0.5 rounded-full">
+                              Event Completed
+                            </span>
+                          )}
                         </div>
                         <span className="text-xs font-mono text-[#707974]">{notice.publishDate}</span>
                       </div>
 
                       {/* Notice Title */}
-                      <h3 className="font-headline font-bold text-lg sm:text-xl text-[#0b1c30] mb-3 leading-snug">
+                      <h3 className={`font-headline font-bold text-lg sm:text-xl mb-3 leading-snug ${
+                        isDatePastFlag ? 'text-[#9ca8a3]' : 'text-[#0b1c30]'
+                      }`}>
                         {notice.title}
                       </h3>
 
@@ -165,11 +182,20 @@ export const CollegeNotices: React.FC<CollegeNoticesProps> = ({
 
                       {/* Action Required Date */}
                       {notice.actionRequiredDate && (
-                        <div className="flex items-center gap-2 text-xs font-bold text-[#ba1a1a] mb-4">
-                          <span className="material-symbols-outlined text-[16px]">schedule</span>
-                          <span>Action Required by: {notice.actionRequiredDate}</span>
+                        <div className={`flex items-center gap-2 text-xs font-bold mb-4 ${
+                          isDatePastFlag ? 'text-[#9ca8a3]' : 'text-[#ba1a1a]'
+                        }`}>
+                          <span className="material-symbols-outlined text-[16px]">
+                            {isDatePastFlag ? 'event_available' : 'schedule'}
+                          </span>
+                          <span>
+                            {isDatePastFlag
+                              ? `Completed on: ${notice.actionRequiredDate}`
+                              : `Action Required by: ${notice.actionRequiredDate}`}
+                          </span>
                         </div>
                       )}
+
                     </div>
 
                     {/* Bottom Action Footer */}
@@ -288,15 +314,35 @@ export const CollegeNotices: React.FC<CollegeNoticesProps> = ({
                   <span className="text-[10px] font-bold uppercase tracking-wider bg-[#b0f0d6] text-[#003527] px-2.5 py-0.5 rounded-full">
                     {activeNoticeModal.category}
                   </span>
-                  {activeNoticeModal.urgency === 'urgent' && (
-                    <span className="text-[10px] font-bold uppercase tracking-wider bg-red-100 text-red-600 px-2.5 py-0.5 rounded-full">
-                      URGENT
-                    </span>
-                  )}
+                  {(() => {
+                    const isPast = (() => {
+                      if (!activeNoticeModal.actionRequiredDate) return false;
+                      try {
+                        const d = new Date(activeNoticeModal.actionRequiredDate);
+                        if (isNaN(d.getTime())) return false;
+                        const today = new Date();
+                        const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                        const eventMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+                        return eventMidnight.getTime() < todayMidnight.getTime();
+                      } catch { return false; }
+                    })();
+                    if (isPast) return (
+                      <span className="text-[10px] font-bold uppercase tracking-wider bg-[#e5eeff] text-[#9ca8a3] px-2.5 py-0.5 rounded-full">
+                        Completed
+                      </span>
+                    );
+                    if (activeNoticeModal.urgency === 'urgent') return (
+                      <span className="text-[10px] font-bold uppercase tracking-wider bg-red-100 text-red-600 px-2.5 py-0.5 rounded-full">
+                        URGENT
+                      </span>
+                    );
+                    return null;
+                  })()}
                 </div>
                 <h3 className="font-headline font-bold text-lg sm:text-xl text-[#0b1c30] mt-1.5">
                   {activeNoticeModal.title}
                 </h3>
+
               </div>
               <button
                 onClick={() => setActiveNoticeModal(null)}

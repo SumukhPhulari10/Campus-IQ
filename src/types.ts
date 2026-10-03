@@ -92,6 +92,7 @@ export interface CollegeDocument {
   contentRaw: string;
   section?: string;
   uploadedBy?: string;
+  actionRequiredDate?: string;
 }
 
 export interface Citation {

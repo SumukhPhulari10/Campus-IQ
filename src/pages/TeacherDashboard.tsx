@@ -105,6 +105,25 @@ const PostNoticeForm: React.FC<{
     };
 
     onNoticeAdded(notice);
+
+    // Persist centrally to database
+    fetch('/api/documents/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: title.trim(),
+        department: user.department || 'General',
+        category,
+        publishedDate: new Date().toISOString().split('T')[0],
+        urgency,
+        contentRaw: content.trim(),
+        fileType: posterImage ? 'image' : 'txt',
+        imageUrl: posterImage || undefined,
+        uploadedBy: user.id,
+        summary: content.trim().slice(0, 160),
+      }),
+    }).catch(() => {});
+
     setTitle(''); setContent(''); setCategory('Events'); setUrgency('normal'); setPosterImage(null);
     setSuccess(true);
     setTimeout(() => setSuccess(false), 3000);

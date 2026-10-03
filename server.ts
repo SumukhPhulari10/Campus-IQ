@@ -185,9 +185,55 @@ app.post('/api/documents/upload', upload.single('file'), async (req: any, res) =
       ? `${(uploadedFile.size / (1024 * 1024)).toFixed(1)} MB`
       : (body.fileSize || '—');
 
+    // ── Academic and Institutional Notice Keywords Dictionary ──
+    const ACADEMIC_NOTICE_KEYWORDS = [
+      'notice', 'circular', 'announcement', 'notification', 'order', 'academic', 'college',
+      'university', 'institute', 'institution', 'campus', 'department', 'faculty', 'professor',
+      'lecturer', 'teacher', 'dean', 'principal', 'director', 'registrar', 'hod', 'senate',
+      'student', 'students', 'semester', 'exam', 'examination', 'test', 'midterm', 'finals',
+      'schedule', 'timetable', 'syllabus', 'curriculum', 'course', 'subject', 'credit',
+      'hall ticket', 'admit card', 'attendance', 'condonation', 'assignment', 'submission',
+      'deadline', 'due date', 'last date', 'registration', 'register', 'event', 'workshop',
+      'hackathon', 'seminar', 'webinar', 'conference', 'symposium', 'cultural', 'fest',
+      'competition', 'sports', 'tournament', 'club', 'placement', 'internship', 'career',
+      'recruitment', 'interview', 'package', 'drive', 'scholarship', 'financial aid',
+      'fees', 'fee', 'tuition', 'bursar', 'challan', 'dues', 'regulations', 'rules',
+      'guidelines', 'code of conduct', 'hostel', 'mess', 'library', 'laboratory', 'lab',
+      'practical', 'viva', 'project', 'convocation', 'graduation', 'result', 'grade',
+      'marks', 'cgpa', 'sgpa', 'holiday', 'orientation', 'induction', 'alumni', 'meeting',
+      'lecture', 'class', 'session', 'batch', 'branch', 'section', 'celebration', 'blood donation'
+    ];
+
+    const scoreAcademicKeywords = (text: string): number => {
+      if (!text) return 0;
+      const lower = text.toLowerCase();
+      let count = 0;
+      for (const kw of ACADEMIC_NOTICE_KEYWORDS) {
+        if (lower.includes(kw)) count++;
+      }
+      return count;
+    };
+
+    // ── 1. Empty Document & Content Checks ──
+    if (uploadedFile) {
+      if (!uploadedFile.buffer || uploadedFile.buffer.length === 0 || uploadedFile.size === 0) {
+        return res.status(400).json({
+          error: 'Document rejected: Uploaded file is empty (0 bytes). Please upload a valid document or poster.'
+        });
+      }
+    } else {
+      // JSON / Text Notice path
+      const rawText = (body.contentRaw || body.content || '').trim();
+      if (!rawText || rawText.length < 15) {
+        return res.status(400).json({
+          error: 'Notice rejected: Notice text content cannot be empty and must be at least 15 characters long.'
+        });
+      }
+    }
+
     // ── Extract text/image content from the uploaded file ──────
-    let contentRaw = body.contentRaw || '';
-    let fileType: 'pdf' | 'docx' | 'txt' | 'web' | 'image' = 'pdf';
+    let contentRaw = (body.contentRaw || body.content || '').trim();
+    let fileType: 'pdf' | 'docx' | 'txt' | 'web' | 'image' = body.fileType || 'pdf';
     let fileUrl = body.fileUrl || body.imageUrl || null;
     let imageUrl = body.imageUrl || body.fileUrl || null;
 
@@ -195,41 +241,195 @@ app.post('/api/documents/upload', upload.single('file'), async (req: any, res) =
       const mime = uploadedFile.mimetype || '';
       const name = uploadedFile.originalname?.toLowerCase() || '';
 
+      // Check for personal photo / non-notice filename patterns
+      const isPersonalPhotoName = /(selfie|portrait|profile[-_]?pic|snapchat|whatsapp[-_]?image|meme|wallpaper|vacation|trip|food[-_]?pic|cat[-_]?pic|dog[-_]?pic|party|car[-_]?photo|screenshot[-_]?chat|gaming)/i.test(name);
+      const isDefaultCameraName = /^(img[-_]\d+|pxl[-_]\d+|dcim|dsc[-_]\d+|sam[-_]\d+|photo[-_]\d+|image[-_]\d+)/i.test(name);
+
       if (mime.startsWith('image/') || ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.bmp'].some(ext => name.endsWith(ext))) {
         fileType = 'image';
+
+        // Check minimum image file size (must be at least 2KB)
+        if (uploadedFile.size < 2048) {
+          return res.status(400).json({
+            error: 'Document rejected: Image file is too small or blank (under 2KB). Please upload a valid event poster or document.'
+          });
+        }
+
         const base64Data = uploadedFile.buffer.toString('base64');
         const mimeType = mime || (name.endsWith('.png') ? 'image/png' : name.endsWith('.svg') ? 'image/svg+xml' : 'image/jpeg');
         const dataUrl = `data:${mimeType};base64,${base64Data}`;
         fileUrl = dataUrl;
         imageUrl = dataUrl;
+
+        // ── Multimodal AI Vision Scanner (if Gemini client is active) ──
+        let aiVerified = false;
+        try {
+          const gemini = getGeminiClient();
+          if (gemini && process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_key_here') {
+            console.log(`[Upload Scanner] Running AI Vision validation on image "${title}"...`);
+            const aiResponse = await gemini.models.generateContent({
+              model: 'gemini-2.5-flash',
+              contents: [
+                {
+                  role: 'user',
+                  parts: [
+                    {
+                      inlineData: {
+                        mimeType,
+                        data: base64Data
+                      }
+                    },
+                    {
+                      text: `You are the strict Institutional Document Verification AI for CampusIQ, an official college portal.
+Examine this uploaded image and determine if it is a legitimate college/university document or event poster.
+
+ACCEPTED:
+- Official college notices, circulars, announcements, orders, timetables, exam schedules, syllabus sheets, fee notices.
+- College event posters (e.g. hackathons, coding contests, workshops, seminars, guest lectures, cultural fests, sports meets, club recruitments, webinars).
+
+STRICTLY REJECTED:
+- Personal photos, selfies, portraits of individuals, group photos without notice/event poster context.
+- Animals, pets, food, dishes, travel, nature, scenery, landscapes, cars, bikes.
+- Memes, casual social media screenshots, WhatsApp chat screenshots, mobile gaming screenshots, wallpapers.
+- Blank, blurry, dark, unreadable, or empty images.
+
+Respond STRICTLY in valid JSON format with NO Markdown wrappers:
+{
+  "isValidNotice": boolean,
+  "rejectionReason": "Short polite explanation if invalid, or empty string if valid",
+  "documentType": "Notice" | "Event Poster" | "Circular" | "Timetable" | "Syllabus" | "Invalid",
+  "detectedTitle": "Short title detected from the poster/document if valid",
+  "extractedText": "Key headline or dates extracted",
+  "actionDate": "YYYY-MM-DD or null if an event or deadline date is clearly visible"
+}`
+                    }
+                  ]
+                }
+              ]
+            });
+
+            const rawText = aiResponse.text?.replace(/```json/g, '').replace(/```/g, '').trim() || '{}';
+            const parsed = JSON.parse(rawText);
+
+            if (parsed.isValidNotice === false) {
+              console.warn(`[Upload Scanner] AI rejected image: ${parsed.rejectionReason}`);
+              return res.status(400).json({
+                error: parsed.rejectionReason || 'Document rejected: The uploaded file was identified as a personal photo or non-official image. Only official college notices, circulars, and academic event posters are permitted.'
+              });
+            }
+
+            aiVerified = true;
+            if (parsed.extractedText) {
+              contentRaw = `${title} — Official Event Poster / Notice Image.\n${parsed.extractedText}`;
+            }
+          }
+        } catch (aiErr: any) {
+          console.warn('[Upload Scanner] AI Vision check fallback to heuristics:', aiErr.message);
+        }
+
+        // ── Heuristic Verification (if AI not active or fallback) ──
+        if (!aiVerified) {
+          if (isPersonalPhotoName) {
+            return res.status(400).json({
+              error: 'Document rejected: The uploaded file was identified as a personal photo or non-official image. Please upload official college notices, circulars, or event posters only.'
+            });
+          }
+
+          const academicScore = scoreAcademicKeywords(title + ' ' + (category || '') + ' ' + (department || ''));
+          if (isDefaultCameraName && academicScore === 0) {
+            return res.status(400).json({
+              error: 'Document rejected: File appears to be an unverified camera photo. If this is an official poster, please provide an official notice title and valid institutional category.'
+            });
+          }
+
+          // Check if title itself is meaningless or personal
+          if (/^(me|my[-_]?pic|photo|selfie|test123|asdfgh)/i.test(title.trim())) {
+            return res.status(400).json({
+              error: 'Document rejected: Please provide a valid official notice or event title.'
+            });
+          }
+        }
+
         if (!contentRaw || contentRaw.length < 5) {
           contentRaw = `${title} — Official Event Poster / Notice Image.\nPublished for ${department} (${category}).`;
         }
-        console.log(`[Upload] Processed image poster "${title}" (${fileSize})`);
+        console.log(`[Upload] Verified & processed image poster "${title}" (${fileSize})`);
+
       } else if (mime === 'application/pdf' || name.endsWith('.pdf')) {
         fileType = 'pdf';
         try {
           contentRaw = await extractPdfText(uploadedFile.buffer);
           console.log(`[Upload] Extracted ${contentRaw.length} chars from PDF "${title}"`);
         } catch (pdfErr: any) {
-          console.warn('[Upload] PDF parse failed, storing filename:', pdfErr.message);
-          contentRaw = `${title}\n[PDF content could not be extracted automatically]`;
+          console.warn('[Upload] PDF parse failed:', pdfErr.message);
+          return res.status(400).json({
+            error: 'Document rejected: The PDF file could not be read or is corrupt. Please upload a valid document.'
+          });
         }
+
+        // Check if PDF is empty
+        if (!contentRaw || contentRaw.trim().length < 20) {
+          return res.status(400).json({
+            error: 'Document rejected: The uploaded PDF is empty or contains no readable text. Please upload a valid document with notice or academic content.'
+          });
+        }
+
+        // Verify PDF contains academic or official notice content
+        const pdfAcademicScore = scoreAcademicKeywords(contentRaw + ' ' + title);
+        if (pdfAcademicScore === 0) {
+          return res.status(400).json({
+            error: 'Document rejected: The uploaded document does not contain official college notices, circulars, or academic event content. Please upload valid institutional materials only.'
+          });
+        }
+
       } else if (mime.startsWith('text/') || name.endsWith('.txt') || name.endsWith('.csv')) {
         fileType = 'txt';
         contentRaw = uploadedFile.buffer.toString('utf-8');
         console.log(`[Upload] Read text file "${title}" (${contentRaw.length} chars)`);
+
+        if (!contentRaw || contentRaw.trim().length < 15) {
+          return res.status(400).json({
+            error: 'Document rejected: The text document is empty or too short. Please provide a complete notice or document.'
+          });
+        }
+
+        const textAcademicScore = scoreAcademicKeywords(contentRaw + ' ' + title);
+        if (textAcademicScore === 0) {
+          return res.status(400).json({
+            error: 'Document rejected: The document does not contain official college notice, circular, or academic content. Please upload valid institutional materials only.'
+          });
+        }
+
       } else if (name.endsWith('.docx') || mime.includes('wordprocessingml')) {
         fileType = 'docx';
         contentRaw = `${title} — ${department} — ${category}`;
+        const docxScore = scoreAcademicKeywords(title + ' ' + category + ' ' + department);
+        if (docxScore === 0) {
+          return res.status(400).json({
+            error: 'Document rejected: Please specify a valid official academic notice or event title.'
+          });
+        }
       } else {
-        contentRaw = `${title} — ${department} — ${category}`;
+        return res.status(400).json({
+          error: 'Document rejected: Unsupported file format. Please upload PDF, Image (PNG/JPG/WEBP), or TXT notice documents.'
+        });
+      }
+    } else {
+      // ── Text Notice Verification (No File Uploaded, Direct Text Notice) ──
+      fileType = 'txt';
+      const textScore = scoreAcademicKeywords(contentRaw + ' ' + title);
+      if (textScore === 0) {
+        return res.status(400).json({
+          error: 'Notice rejected: The announcement content or title must relate to official college matters, events, circulars, exams, schedules, or academic information.'
+        });
       }
     }
 
-    // If still empty (JSON path with no contentRaw), use title-based fallback
+    // If still empty, reject
     if (!contentRaw || contentRaw.trim().length < 5) {
-      contentRaw = `${title} — ${department} — ${category}`;
+      return res.status(400).json({
+        error: 'Document rejected: Content cannot be empty. Please provide valid notice or document information.'
+      });
     }
 
     const id = `doc_${Date.now()}`;

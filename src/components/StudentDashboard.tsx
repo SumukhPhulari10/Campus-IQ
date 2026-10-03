@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { StudentProfile, Notice, DeadlineItem, CollegeDocument } from '../types';
 import { findNextClass, CSE_B_WEEKLY_SCHEDULE, DAY_NAMES } from '../lib/timetable';
 import { AcademicCalendarWidget } from './AcademicCalendarWidget';
+import { isDatePast, daysUntil } from '../lib/dateUtils';
 
 interface StudentDashboardProps {
   student: StudentProfile & { section?: string };
@@ -217,82 +218,137 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               )}
             </div>
 
-            {/* ── Highlighted Recent Uploads — "NEW" documents pop up here ── */}
-            {recentDocs.length > 0 && (
-              <div className="space-y-3" id="highlighted-uploads">
-                {recentDocs.map((doc, idx) => {
-                  const colors = getCategoryColor(doc.category);
-                  const isNew = idx < 2; // top 2 are "new" and highlighted
-                  return (
-                    <div
-                      key={doc.id}
-                      onClick={() => setViewingDoc(doc)}
-                      className={`relative rounded-2xl p-5 border cursor-pointer transition-all
-                                  hover:shadow-lg hover:-translate-y-0.5 group overflow-hidden
-                                  ${isNew
-                                    ? `${colors.bg} ${colors.border} border-2 shadow-md`
-                                    : 'bg-white border-[#bfc9c3]/30 shadow-xs'
-                                  }`}
-                    >
-                      {/* New badge for most recent */}
-                      {isNew && (
-                        <div className="absolute top-0 right-0">
-                          <div className={`${colors.accent} text-white text-[9px] font-extrabold uppercase tracking-wider
-                                          px-3 py-1 rounded-bl-xl`}>
-                            NEW
+            {/* ── Highlighted Recent Uploads — sorted by deadline priority ── */}
+            {recentDocs.length > 0 && (() => {
+              // Sort: near-deadline first → no-date → completed (past) last
+              const sorted = [...recentDocs].sort((a, b) => {
+                const dA = daysUntil(a.actionRequiredDate);
+                const dB = daysUntil(b.actionRequiredDate);
+                const pastA = dA !== null && dA < 0;
+                const pastB = dB !== null && dB < 0;
+                // Completed items go to bottom
+                if (pastA && !pastB) return 1;
+                if (!pastA && pastB) return -1;
+                // Both completed — most recently completed first
+                if (pastA && pastB) return (dB ?? 0) - (dA ?? 0);
+                // Among active: has-date before no-date, then nearest deadline first
+                if (dA !== null && dB !== null) return dA - dB;
+                if (dA !== null) return -1;
+                if (dB !== null) return 1;
+                return 0;
+              });
+
+              return (
+                <div className="space-y-3" id="highlighted-uploads">
+                  {sorted.map((doc, idx) => {
+                    const colors = getCategoryColor(doc.category);
+                    const docDays = daysUntil(doc.actionRequiredDate);
+                    const docCompleted = docDays !== null && docDays < 0;
+                    const isNew = !docCompleted && idx < 2;
+
+                    return (
+                      <div
+                        key={doc.id}
+                        onClick={() => setViewingDoc(doc)}
+                        className={`relative rounded-2xl p-5 border cursor-pointer transition-all
+                                    hover:shadow-lg hover:-translate-y-0.5 group overflow-hidden
+                                    ${docCompleted
+                                      ? 'bg-[#f4f5f7] border-[#d1d5db] opacity-75'
+                                      : isNew
+                                      ? `${colors.bg} ${colors.border} border-2 shadow-md`
+                                      : 'bg-white border-[#bfc9c3]/30 shadow-xs'
+                                    }`}
+                      >
+                        {/* COMPLETED banner — highly visible */}
+                        {docCompleted && (
+                          <div className="absolute top-0 right-0">
+                            <div className="bg-[#6b7280] text-white text-[9px] font-extrabold uppercase tracking-wider
+                                            px-3.5 py-1.5 rounded-bl-xl flex items-center gap-1">
+                              <span className="material-symbols-outlined text-[12px]">check_circle</span>
+                              COMPLETED
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
 
-                      {/* Accent strip on left */}
-                      <div className={`absolute left-0 top-0 bottom-0 w-1 ${colors.accent} rounded-l-2xl`} />
+                        {/* New badge for most recent active docs */}
+                        {isNew && !docCompleted && (
+                          <div className="absolute top-0 right-0">
+                            <div className={`${colors.accent} text-white text-[9px] font-extrabold uppercase tracking-wider
+                                            px-3 py-1 rounded-bl-xl`}>
+                              NEW
+                            </div>
+                          </div>
+                        )}
 
-                      <div className="flex items-start gap-4 pl-3">
-                        <div className={`w-12 h-12 rounded-2xl ${isNew ? colors.accent : 'bg-[#eff4ff]'} flex items-center
-                                        justify-center shrink-0 ${isNew ? 'text-white' : colors.text} shadow-sm`}>
-                          <span className="material-symbols-outlined text-[24px]">
-                            {getCategoryIcon(doc.category)}
-                          </span>
-                        </div>
+                        {/* Accent strip on left */}
+                        <div className={`absolute left-0 top-0 bottom-0 w-1 ${docCompleted ? 'bg-[#9ca3af]' : colors.accent} rounded-l-2xl`} />
 
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                            <span className={`text-[10px] font-extrabold uppercase tracking-wider ${colors.text}`}>
-                              {doc.category}
+                        <div className="flex items-start gap-4 pl-3">
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-sm
+                                          ${docCompleted
+                                            ? 'bg-[#e5e7eb] text-[#9ca3af]'
+                                            : isNew
+                                            ? `${colors.accent} text-white`
+                                            : `bg-[#eff4ff] ${colors.text}`
+                                          }`}>
+                            <span className="material-symbols-outlined text-[24px]">
+                              {docCompleted ? 'event_available' : getCategoryIcon(doc.category)}
                             </span>
-                            <span className="text-[10px] text-[#9ca8a3]">·</span>
-                            <span className="text-[11px] text-[#707974] font-medium">{doc.department}</span>
                           </div>
 
-                          <h4 className={`font-inter font-bold text-[0.9375rem] leading-snug mb-1.5
-                                         group-hover:text-[#003527] transition-colors
-                                         ${isNew ? 'text-[#0b1c30]' : 'text-[#17283a]'}`}>
-                            {doc.title}
-                          </h4>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                              <span className={`text-[10px] font-extrabold uppercase tracking-wider
+                                               ${docCompleted ? 'text-[#9ca3af]' : colors.text}`}>
+                                {doc.category}
+                              </span>
+                              <span className="text-[10px] text-[#9ca8a3]">·</span>
+                              <span className="text-[11px] text-[#707974] font-medium">{doc.department}</span>
+                              {docCompleted && doc.actionRequiredDate && (
+                                <span className="text-[9px] font-bold bg-[#f3f4f6] text-[#6b7280] px-2 py-0.5 rounded-full
+                                               border border-[#d1d5db] flex items-center gap-0.5">
+                                  <span className="material-symbols-outlined text-[10px]">event_available</span>
+                                  Ended: {doc.actionRequiredDate}
+                                </span>
+                              )}
+                            </div>
 
-                          <p className="text-xs text-[#707974] line-clamp-2 leading-relaxed">
-                            {(doc.summary || '').replace(/Indexed with \d+ semantic chunks\.?/gi, '').trim() || doc.title}
-                          </p>
+                            <h4 className={`font-inter font-bold text-[0.9375rem] leading-snug mb-1.5
+                                           transition-colors
+                                           ${docCompleted
+                                             ? 'text-[#9ca3af] line-through decoration-[#d1d5db]'
+                                             : isNew
+                                             ? 'text-[#0b1c30] group-hover:text-[#003527]'
+                                             : 'text-[#17283a] group-hover:text-[#003527]'
+                                           }`}>
+                              {doc.title}
+                            </h4>
 
-                          <div className="flex items-center gap-3 mt-2 text-[11px] text-[#9ca8a3]">
-                            <span className="flex items-center gap-1">
-                              <span className="material-symbols-outlined text-[13px]">apartment</span>
-                              {doc.department}
-                            </span>
+                            <p className={`text-xs line-clamp-2 leading-relaxed
+                                          ${docCompleted ? 'text-[#9ca3af]' : 'text-[#707974]'}`}>
+                              {(doc.summary || '').replace(/Indexed with \d+ semantic chunks\.?/gi, '').trim() || doc.title}
+                            </p>
+
+                            <div className="flex items-center gap-3 mt-2 text-[11px] text-[#9ca8a3]">
+                              <span className="flex items-center gap-1">
+                                <span className="material-symbols-outlined text-[13px]">apartment</span>
+                                {doc.department}
+                              </span>
+                            </div>
                           </div>
-                        </div>
 
-                        <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 transition-opacity self-center">
-                          <div className={`w-8 h-8 rounded-full ${colors.accent} text-white flex items-center justify-center`}>
-                            <span className="material-symbols-outlined text-[16px]">visibility</span>
+                          <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 transition-opacity self-center">
+                            <div className={`w-8 h-8 rounded-full ${docCompleted ? 'bg-[#9ca3af]' : colors.accent} text-white flex items-center justify-center`}>
+                              <span className="material-symbols-outlined text-[16px]">visibility</span>
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              );
+            })()}
 
             {docsLoading && allDocs.length === 0 && (
               <div className="card p-8 animate-pulse space-y-3">
@@ -325,7 +381,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                   </div>
                   <div>
                     <h3 className="font-headline font-bold text-lg text-[#0b1c30]">
-                      Notices & Announcements
+                      Notices &amp; Announcements
                     </h3>
                     <p className="text-[11px] text-[#9ca8a3]">
                       Centralized updates for all students
@@ -342,71 +398,101 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 )}
               </div>
 
-              {notices.length === 0 ? (
-                <div className="text-center py-10">
-                  <div className="w-14 h-14 rounded-2xl bg-[#eff4ff] flex items-center justify-center mx-auto mb-3">
-                    <span className="material-symbols-outlined text-[28px] text-[#003527]">notifications_none</span>
-                  </div>
-                  <h4 className="font-headline font-bold text-base text-[#0b1c30] mb-1">No notices yet</h4>
-                  <p className="text-sm text-[#5a6672]">Notices will appear here once published.</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {notices
-                    .filter(n => n.category !== 'Timetable' && !n.title.toLowerCase().includes('timetable') && !n.title.toLowerCase().includes(' cse b tt'))
-                    .slice(0, 4).map((notice) => (
-                    <div
-                      key={notice.id}
-                      onClick={() => onViewNotice(notice)}
-                      className="flex gap-3.5 p-3.5 rounded-xl bg-[#f4f7ff]/60 hover:bg-[#e5eeff]/70
-                                 border border-transparent hover:border-[#bfc9c3]/30
-                                 cursor-pointer transition-all group"
-                    >
-                      <div className={`w-9 h-9 rounded-full flex items-center justify-center
-                                      shrink-0 text-[15px]
-                                      ${notice.urgency === 'urgent'
-                                        ? 'bg-red-100 text-red-600'
-                                        : notice.category === 'Scholarships'
-                                        ? 'bg-[#b0f0d6] text-[#003527]'
-                                        : 'bg-[#e5eeff] text-[#0b1c30]'
-                                      }`}>
-                        <span className="material-symbols-outlined text-[15px]">
-                          {notice.urgency === 'urgent'
-                            ? 'priority_high'
-                            : notice.category === 'Scholarships'
-                            ? 'school'
-                            : 'campaign'}
-                        </span>
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <p className={`text-[10px] font-bold uppercase tracking-wider
-                                        ${notice.urgency === 'urgent' ? 'text-red-500' : 'text-[#9ca8a3]'}`}>
-                            {notice.publishDate}
-                          </p>
-                          {notice.urgency === 'urgent' && (
-                            <span className="text-[9px] font-bold bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full">
-                              URGENT
-                            </span>
-                          )}
-                        </div>
-                        <h4 className="font-inter font-bold text-[0.8125rem] text-[#0b1c30]
-                                       group-hover:text-[#003527] transition-colors leading-snug mb-0.5">
-                          {notice.title}
-                        </h4>
-                        <p className="text-xs text-[#707974] line-clamp-1 leading-relaxed">
-                          {(notice.aiSummary || '').replace(/Indexed with \d+ semantic chunks\.?/gi, '').trim()}
-                        </p>
-                      </div>
-                      <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <span className="material-symbols-outlined text-[16px] text-[#003527]">arrow_forward</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              {(() => {
+                // Split: fresh = no date or future date; completed = past date
+                const filtered = notices.filter(
+                  n => n.category !== 'Timetable' &&
+                       !n.title.toLowerCase().includes('timetable') &&
+                       !n.title.toLowerCase().includes(' cse b tt')
+                );
+                const freshNotices = filtered.filter(n => !isDatePast(n.actionRequiredDate));
 
-              {notices.length > 4 && (
+                if (notices.length === 0) {
+                  return (
+                    <div className="text-center py-10">
+                      <div className="w-14 h-14 rounded-2xl bg-[#eff4ff] flex items-center justify-center mx-auto mb-3">
+                        <span className="material-symbols-outlined text-[28px] text-[#003527]">notifications_none</span>
+                      </div>
+                      <h4 className="font-headline font-bold text-base text-[#0b1c30] mb-1">No notices yet</h4>
+                      <p className="text-sm text-[#5a6672]">Notices will appear here once published.</p>
+                    </div>
+                  );
+                }
+
+                if (freshNotices.length === 0) {
+                  return (
+                    <div className="text-center py-8 bg-[#f8f9ff] rounded-2xl border border-dashed border-[#bfc9c3]/50">
+                      <span className="material-symbols-outlined text-[32px] text-[#9ca8a3] mb-1">check_circle</span>
+                      <p className="text-xs font-bold text-[#0b1c30]">All caught up!</p>
+                      <p className="text-[11px] text-[#707974] mt-0.5">No active notices right now. Past events are in the sidebar.</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-3">
+                    {freshNotices.slice(0, 4).map((notice) => {
+                      const showUrgent = notice.urgency === 'urgent' || notice.urgency === 'high';
+                      return (
+                        <div
+                          key={notice.id}
+                          onClick={() => onViewNotice(notice)}
+                          className="flex gap-3.5 p-3.5 rounded-xl bg-[#f4f7ff]/60 hover:bg-[#e5eeff]/70
+                                     border border-transparent hover:border-[#bfc9c3]/30
+                                     cursor-pointer transition-all group"
+                        >
+                          <div className={`w-9 h-9 rounded-full flex items-center justify-center
+                                          shrink-0 text-[15px]
+                                          ${showUrgent
+                                            ? 'bg-red-100 text-red-600'
+                                            : notice.category === 'Scholarships'
+                                            ? 'bg-[#b0f0d6] text-[#003527]'
+                                            : 'bg-[#e5eeff] text-[#0b1c30]'
+                                          }`}>
+                            <span className="material-symbols-outlined text-[15px]">
+                              {showUrgent
+                                ? 'priority_high'
+                                : notice.category === 'Scholarships'
+                                ? 'school'
+                                : 'campaign'}
+                            </span>
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <p className={`text-[10px] font-bold uppercase tracking-wider
+                                            ${showUrgent ? 'text-red-500' : 'text-[#9ca8a3]'}`}>
+                                {notice.publishDate}
+                              </p>
+                              {showUrgent && (
+                                <span className="text-[9px] font-bold bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full">
+                                  URGENT
+                                </span>
+                              )}
+                            </div>
+                            <h4 className="font-inter font-bold text-[0.8125rem] leading-snug mb-0.5
+                                           text-[#0b1c30] group-hover:text-[#003527] transition-colors">
+                              {notice.title}
+                            </h4>
+                            <p className="text-xs text-[#707974] line-clamp-1 leading-relaxed">
+                              {(notice.aiSummary || '').replace(/Indexed with \d+ semantic chunks\.?/gi, '').trim()}
+                            </p>
+                          </div>
+                          <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <span className="material-symbols-outlined text-[16px] text-[#003527]">arrow_forward</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
+              {notices.filter(
+                n => n.category !== 'Timetable' &&
+                     !n.title.toLowerCase().includes('timetable') &&
+                     !n.title.toLowerCase().includes(' cse b tt') &&
+                     !isDatePast(n.actionRequiredDate)
+              ).length > 4 && (
                 <>
                   <hr className="section-divider my-4" />
                   <button
@@ -414,7 +500,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                     className="w-full py-2 rounded-xl text-xs font-bold text-[#003527]
                                hover:bg-[#eff4ff] transition-colors flex items-center justify-center gap-1.5"
                   >
-                    View All {notices.length} Notices
+                    View All Active Notices
                     <span className="material-symbols-outlined text-[15px]">arrow_forward</span>
                   </button>
                 </>
@@ -704,6 +790,64 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
             </div>
 
 
+            {/* ── Completed / Past Events Sidebar Widget ───────────── */}
+            {(() => {
+              const completedNotices = notices.filter(
+                n => n.category !== 'Timetable' &&
+                     !n.title.toLowerCase().includes('timetable') &&
+                     !n.title.toLowerCase().includes(' cse b tt') &&
+                     isDatePast(n.actionRequiredDate)
+              );
+              if (completedNotices.length === 0) return null;
+              return (
+                <div className="card p-5" id="completed-events-sidebar">
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="w-9 h-9 rounded-xl bg-[#e5eeff] flex items-center justify-center">
+                      <span className="material-symbols-outlined text-[18px] text-[#707974]">event_available</span>
+                    </div>
+                    <div>
+                      <h3 className="font-headline font-bold text-sm text-[#5a6672]">Past Events</h3>
+                      <p className="text-[10px] text-[#9ca8a3]">{completedNotices.length} completed</p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {completedNotices.map(notice => (
+                      <button
+                        key={notice.id}
+                        onClick={() => onViewNotice(notice)}
+                        className="w-full flex items-start gap-2.5 p-3 rounded-xl
+                                   bg-[#f4f7ff]/50 hover:bg-[#e5eeff]/60
+                                   border border-[#bfc9c3]/20 hover:border-[#bfc9c3]/40
+                                   transition-all group text-left"
+                      >
+                        <div className="w-7 h-7 rounded-full bg-[#e5eeff] flex items-center justify-center shrink-0 mt-0.5">
+                          <span className="material-symbols-outlined text-[14px] text-[#9ca8a3]">check_circle</span>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                            <span className="text-[9px] font-extrabold uppercase tracking-wider
+                                           bg-[#e5eeff] text-[#9ca8a3] px-1.5 py-0.5 rounded-full
+                                           flex items-center gap-0.5">
+                              <span className="material-symbols-outlined text-[10px]">event_available</span>
+                              Completed
+                            </span>
+                            <span className="text-[9px] text-[#9ca8a3] font-medium">
+                              {notice.actionRequiredDate}
+                            </span>
+                          </div>
+                          <p className="text-[0.75rem] font-semibold text-[#9ca8a3]
+                                        line-clamp-2 leading-snug group-hover:text-[#5a6672]
+                                        transition-colors line-through decoration-[#bfc9c3]/60">
+                            {notice.title}
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
           </section>
         </div>
 
@@ -825,10 +969,13 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                   { label: 'Academic Year', value: viewingDoc.academicYear },
                   { label: 'Audience', value: viewingDoc.section ? `Section ${viewingDoc.section}` : 'All Students' },
                   { label: 'Published', value: viewingDoc.publishedDate },
+                  ...(viewingDoc.actionRequiredDate ? [{ label: 'Action Deadline', value: viewingDoc.actionRequiredDate }] : []),
                 ].map(item => (
                   <div key={item.label} className="bg-[#f8f9ff] rounded-xl p-3">
                     <p className="text-[10px] font-bold text-[#9ca8a3] uppercase tracking-wider mb-0.5">{item.label}</p>
-                    <p className="text-sm font-semibold text-[#0b1c30]">{item.value}</p>
+                    <p className={`text-sm font-semibold ${item.label === 'Action Deadline' ? 'text-[#ba1a1a]' : 'text-[#0b1c30]'}`}>
+                      {item.value}
+                    </p>
                   </div>
                 ))}
               </div>
@@ -845,11 +992,11 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 </div>
               )}
 
-              {/* Full content */}
-              {(viewingDoc.contentRaw && viewingDoc.contentRaw.length > 50) || viewingDoc.category === 'Timetable' ? (
+              {/* Full content / Text notice view */}
+              {(viewingDoc.contentRaw && viewingDoc.contentRaw.trim().length > 0) || viewingDoc.category === 'Timetable' ? (
                 <div>
                   <p className="text-xs font-bold text-[#404944] uppercase mb-2">
-                    {viewingDoc.category === 'Timetable' ? 'Schedule' : 'Document Content'}
+                    {viewingDoc.category === 'Timetable' ? 'Schedule' : viewingDoc.fileType === 'txt' ? 'Official Notice Message' : 'Document Content'}
                   </p>
                   <div className="bg-white rounded-xl border border-[#bfc9c3]/30 overflow-hidden shadow-xs">
                     {viewingDoc.category === 'Timetable' ? (
@@ -899,10 +1046,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                         </div>
                       </div>
                     ) : (
-                      <div className="p-4 bg-[#f8f9ff] max-h-[300px] overflow-y-auto">
-                        <pre className="text-sm text-[#5a6672] leading-relaxed whitespace-pre-wrap font-inter">
+                      <div className="p-5 bg-[#f8f9ff] max-h-[340px] overflow-y-auto">
+                        <div className="text-sm text-[#17283a] leading-relaxed whitespace-pre-wrap font-inter">
                           {viewingDoc.contentRaw}
-                        </pre>
+                        </div>
                       </div>
                     )}
                   </div>

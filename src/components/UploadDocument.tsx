@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { CollegeDocument } from '../types';
 import { AuthUser } from '../types';
+import { TextNoticeUpload } from './TextNoticeUpload';
 
 interface UploadDocumentProps {
   onDocumentAdded: (doc: CollegeDocument) => void;
@@ -9,7 +10,7 @@ interface UploadDocumentProps {
   user?: AuthUser;
 }
 
-type UploadView = 'upload' | 'materials';
+type UploadView = 'upload' | 'text-notice' | 'materials';
 
 export const UploadDocument: React.FC<UploadDocumentProps> = ({
   onDocumentAdded,
@@ -34,6 +35,7 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   // Uploaded materials list
   const [uploadedDocs, setUploadedDocs] = useState<CollegeDocument[]>([]);
@@ -64,7 +66,56 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
     }
   }, [activeView]);
 
+  const checkImageBlankness = (fileObj: File): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      const url = URL.createObjectURL(fileObj);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = 40;
+          canvas.height = 40;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return resolve(false);
+          ctx.drawImage(img, 0, 0, 40, 40);
+          const data = ctx.getImageData(0, 0, 40, 40).data;
+          let sum = 0;
+          let sumSq = 0;
+          const count = 40 * 40;
+          for (let i = 0; i < data.length; i += 4) {
+            const brightness = (data[i] + data[i+1] + data[i+2]) / 3;
+            sum += brightness;
+            sumSq += brightness * brightness;
+          }
+          const mean = sum / count;
+          const variance = (sumSq / count) - (mean * mean);
+          if (variance < 3) {
+            resolve(true); // blank solid color
+          } else {
+            resolve(false);
+          }
+        } catch {
+          resolve(false);
+        }
+      };
+      img.onerror = () => resolve(false);
+      img.src = url;
+    });
+  };
+
   const processSelectedFile = (selected: File) => {
+    setUploadError(null);
+
+    if (selected.size === 0) {
+      setUploadError('Selected file is empty (0 bytes). Please select a valid document.');
+      return;
+    }
+
+    if (/(selfie|portrait|profile[-_]?pic|snapchat|whatsapp[-_]?image|meme|wallpaper|vacation|trip|food[-_]?pic|party|cat[-_]?pic|dog[-_]?pic)/i.test(selected.name)) {
+      setUploadError('Warning: This file appears to be a personal photo or meme. The system only accepts official college notices, circulars, and academic event posters.');
+    }
+
     setSelectedFileObj(selected);
     setFile({
       name: selected.name,
@@ -75,6 +126,11 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
     const isImg = selected.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(selected.name);
     if (isImg) {
       setCategory('Events');
+      checkImageBlankness(selected).then((isBlank) => {
+        if (isBlank) {
+          setUploadError('The selected image appears to be completely blank or empty. Please select a valid event poster or document.');
+        }
+      });
       const reader = new FileReader();
       reader.onload = (ev) => {
         setImagePreviewUrl(ev.target?.result as string);
@@ -100,30 +156,52 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
 
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || isProcessing) return;
+    setUploadError(null);
+
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) {
+      setUploadError('Please enter a document title.');
+      return;
+    }
+    if (!/^[a-zA-Z]/.test(trimmedTitle)) {
+      setUploadError('Document title must begin with an alphabet letter.');
+      return;
+    }
+    if (trimmedTitle.length < 3) {
+      setUploadError('Document title must be at least 3 characters long.');
+      return;
+    }
+
+    const fileToUpload = selectedFileObj || fileInputRef.current?.files?.[0];
+    if (!fileToUpload) {
+      setUploadError('Please select a document or poster file to upload.');
+      return;
+    }
+    if (fileToUpload.size === 0) {
+      setUploadError('The uploaded file is empty (0 bytes). Please select a valid document.');
+      return;
+    }
 
     setIsProcessing(true);
 
-    const isImg = selectedFileObj
-      ? (selectedFileObj.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(selectedFileObj.name))
-      : false;
+    const isImg = fileToUpload.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(fileToUpload.name);
 
     // Build a local doc object for optimistic UI update
     const localDoc: CollegeDocument = {
       id: `doc_${Date.now()}`,
-      title,
+      title: trimmedTitle,
       department,
       category,
       academicYear: new Date().getFullYear() + '-' + (new Date().getFullYear() + 1),
       publishedDate,
       fileType: isImg ? 'image' : 'pdf',
-      fileSize: file?.size || '—',
+      fileSize: file?.size || `${(fileToUpload.size / (1024 * 1024)).toFixed(1)} MB`,
       status: 'indexed',
       totalChunks: 24,
       imageUrl: imagePreviewUrl || undefined,
       fileUrl: imagePreviewUrl || undefined,
       summary: `${category} uploaded for ${department}${section ? ` Section ${section}` : ''}.`,
-      contentRaw: `${title} — ${department} — ${category}`,
+      contentRaw: `${trimmedTitle} — ${department} — ${category}`,
       section: section || undefined,
       uploadedBy: user?.id,
       actionRequiredDate: actionRequiredDate.trim() || undefined,
@@ -131,56 +209,51 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
 
     try {
       let serverDoc = localDoc;
-      const fileToUpload = selectedFileObj || fileInputRef.current?.files?.[0];
 
-      if (fileToUpload) {
-        // ── Send the actual file via multipart/form-data ──────────
-        const formData = new FormData();
-        formData.append('file', fileToUpload);
-        formData.append('title', title);
-        formData.append('department', department);
-        formData.append('category', category);
-        formData.append('section', section);
-        formData.append('publishedDate', publishedDate);
-        formData.append('uploadedBy', user?.id || '');
-        if (actionRequiredDate.trim()) {
-          formData.append('actionRequiredDate', actionRequiredDate.trim());
-        }
+      // Send the actual file via multipart/form-data
+      const formData = new FormData();
+      formData.append('file', fileToUpload);
+      formData.append('title', trimmedTitle);
+      formData.append('department', department);
+      formData.append('category', category);
+      formData.append('section', section);
+      formData.append('publishedDate', publishedDate);
+      formData.append('uploadedBy', user?.id || '');
+      if (actionRequiredDate.trim()) {
+        formData.append('actionRequiredDate', actionRequiredDate.trim());
+      }
 
-        const res = await fetch('/api/documents/upload', {
-          method: 'POST',
-          body: formData,
-        });
-        const data = await res.json();
-        if (data.document) {
-          serverDoc = { ...localDoc, ...data.document, imageUrl: data.document.imageUrl || imagePreviewUrl || undefined };
-        }
-      } else {
-        // No file selected — JSON path (manual text only)
-        const res = await fetch('/api/documents/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...localDoc, uploadedBy: user?.id, actionRequiredDate: actionRequiredDate.trim() || undefined }),
-        });
-        const data = await res.json();
-        if (data.document) serverDoc = { ...localDoc, ...data.document };
+      const res = await fetch('/api/documents/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        setUploadError(data.error || 'Document rejected: verification failed.');
+        setIsProcessing(false);
+        return;
+      }
+
+      if (data.document) {
+        serverDoc = { ...localDoc, ...data.document, imageUrl: data.document.imageUrl || imagePreviewUrl || undefined };
       }
 
       onDocumentAdded(serverDoc);
-    } catch (err) {
-      console.warn('Upload failed, adding locally:', err);
-      onDocumentAdded(localDoc);
+      setIsSuccess(true);
+      setFile(null);
+      setSelectedFileObj(null);
+      setImagePreviewUrl(null);
+      setTitle('');
+      setSection('');
+      setActionRequiredDate('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err: any) {
+      console.warn('Upload network error:', err);
+      setUploadError('Failed to upload document due to network issue. Please try again.');
+    } finally {
+      setIsProcessing(false);
     }
-
-    setIsProcessing(false);
-    setIsSuccess(true);
-    setFile(null);
-    setSelectedFileObj(null);
-    setImagePreviewUrl(null);
-    setTitle('');
-    setSection('');
-    setActionRequiredDate('');
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleDelete = async (docId: string) => {
@@ -236,19 +309,29 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
             </p>
           </div>
           {/* View toggle */}
-          <div className="flex bg-white rounded-2xl p-1 border border-[#bfc9c3]/30 shadow-xs gap-1">
+          <div className="flex bg-white rounded-2xl p-1 border border-[#bfc9c3]/30 shadow-xs gap-1 flex-wrap">
             <button
-              onClick={() => setActiveView('upload')}
+              onClick={() => { setActiveView('upload'); setUploadError(null); }}
               className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all
                 ${activeView === 'upload'
                   ? 'bg-[#003527] text-white shadow-sm'
                   : 'text-[#9ca8a3] hover:text-[#003527]'}`}
             >
               <span className="material-symbols-outlined text-[18px]">upload_file</span>
-              Upload New
+              Upload Document / Poster
             </button>
             <button
-              onClick={() => setActiveView('materials')}
+              onClick={() => { setActiveView('text-notice'); setUploadError(null); }}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all
+                ${activeView === 'text-notice'
+                  ? 'bg-[#003527] text-white shadow-sm'
+                  : 'text-[#9ca8a3] hover:text-[#003527]'}`}
+            >
+              <span className="material-symbols-outlined text-[18px]">edit_note</span>
+              Publish Text Notice
+            </button>
+            <button
+              onClick={() => { setActiveView('materials'); setUploadError(null); }}
               className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all
                 ${activeView === 'materials'
                   ? 'bg-[#003527] text-white shadow-sm'
@@ -259,6 +342,37 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Verification Error Alert */}
+        {uploadError && (
+          <div className="mb-6 p-4 rounded-2xl bg-red-50 border border-red-200 text-red-900 flex items-start justify-between animate-fade-in shadow-xs">
+            <div className="flex items-start gap-3">
+              <span className="material-symbols-outlined text-[24px] text-red-600 mt-0.5">error</span>
+              <div>
+                <p className="font-bold text-sm">Document Verification Failed</p>
+                <p className="text-xs text-red-700 mt-0.5">{uploadError}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setUploadError(null)}
+              className="text-xs font-bold text-red-600 hover:text-red-800 px-2 py-1"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* ─── TEXT NOTICE VIEW ─── */}
+        {activeView === 'text-notice' && (
+          <TextNoticeUpload
+            user={user}
+            onDocumentAdded={(doc) => {
+              onDocumentAdded(doc);
+              setUploadedDocs(prev => [doc, ...prev]);
+            }}
+            onViewMaterials={() => setActiveView('materials')}
+          />
+        )}
 
         {/* ─── UPLOAD VIEW ─── */}
         {activeView === 'upload' && (
@@ -537,7 +651,7 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
                       {isProcessing ? (
                         <>
                           <span className="material-symbols-outlined text-[18px] animate-spin">sync</span>
-                          Publishing Document…
+                          Scanning & Verifying Document…
                         </>
                       ) : (
                         <>
