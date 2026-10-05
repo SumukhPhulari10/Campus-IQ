@@ -329,12 +329,14 @@ Respond STRICTLY in valid JSON format with NO Markdown wrappers:
 
         // ── Heuristic Verification (if AI not active or fallback) ──
         if (!aiVerified) {
+          // Block known personal photo filename patterns
           if (isPersonalPhotoName) {
             return res.status(400).json({
               error: 'Document rejected: The uploaded file was identified as a personal photo or non-official image. Please upload official college notices, circulars, or event posters only.'
             });
           }
 
+          // Block camera-roll filenames with zero academic context
           const academicScore = scoreAcademicKeywords(title + ' ' + (category || '') + ' ' + (department || ''));
           if (isDefaultCameraName && academicScore === 0) {
             return res.status(400).json({
@@ -342,10 +344,20 @@ Respond STRICTLY in valid JSON format with NO Markdown wrappers:
             });
           }
 
-          // Check if title itself is meaningless or personal
-          if (/^(me|my[-_]?pic|photo|selfie|test123|asdfgh)/i.test(title.trim())) {
+          // Block obviously personal or meaningless titles
+          if (/^(me|my[-_]?pic|photo|selfie|test\d*|asdfgh|trial|sample|image|upload|pic|picture|random|dummy|xyz|abc|untitled|new[-_]?doc)/i.test(title.trim())) {
             return res.status(400).json({
-              error: 'Document rejected: Please provide a valid official notice or event title.'
+              error: 'Document rejected: Please provide a valid official notice or event poster title (e.g. "Hackathon 2026 Poster" or "Exam Schedule Notice").'
+            });
+          }
+
+          // ── Core academic relevance check for images (same bar as PDFs/DOCX/TXT) ──
+          // Without AI vision, we cannot verify image content, so the title + category
+          // MUST contain at least 2 academic/institutional keywords to be accepted.
+          const imageAcademicScore = scoreAcademicKeywords(title + ' ' + (category || '') + ' ' + (department || ''));
+          if (imageAcademicScore < 2) {
+            return res.status(400).json({
+              error: 'Document rejected: Image uploads must be official college notices or event posters. Please ensure the title clearly describes the notice or event (e.g. "Annual Hackathon Poster", "Exam Schedule Notice", "Workshop Registration Circular").'
             });
           }
         }

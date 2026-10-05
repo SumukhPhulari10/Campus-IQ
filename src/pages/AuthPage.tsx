@@ -155,6 +155,51 @@ const Field: React.FC<{
   );
 };
 
+// ── Select (dropdown) helper ────────────────────────────────
+const SelectField: React.FC<{
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  placeholder?: string;
+  accent?: 'green' | 'amber';
+}> = ({ label, value, onChange, options, placeholder = 'Select', accent = 'green' }) => (
+  <div>
+    <label className="block text-[11px] font-bold text-[#5a6672] uppercase tracking-wide mb-1.5">
+      {label}
+    </label>
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={`w-full px-4 py-3 rounded-xl border border-[#bfc9c3]/40 bg-[#f8fafe]
+                  text-sm text-[#0b1c30] focus:outline-none transition-all appearance-none
+                  ${accent === 'green'
+                    ? 'focus:border-[#003527] focus:ring-1 focus:ring-[#003527]/15'
+                    : 'focus:border-[#fea619] focus:ring-1 focus:ring-[#fea619]/15'}
+                  ${!value ? 'text-[#c8d0cc]' : ''}`}
+    >
+      <option value="">{placeholder}</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>{o.label}</option>
+      ))}
+    </select>
+  </div>
+);
+
+// ── Shared branch list ───────────────────────────────────────
+const DEPARTMENT_OPTIONS = [
+  { value: 'Computer Science & Engineering',               label: 'CSE — Computer Science & Engineering' },
+  { value: 'Information Technology',                       label: 'IT — Information Technology' },
+  { value: 'Electronics & Telecommunication Engineering',  label: 'ENTC — Electronics & Telecommunication' },
+  { value: 'Mechanical Engineering',                       label: 'Mech — Mechanical Engineering' },
+  { value: 'Civil Engineering',                            label: 'Civil — Civil Engineering' },
+  { value: 'AI & Machine Learning',                        label: 'AIML — AI & Machine Learning' },
+  { value: 'Data Science',                                 label: 'DS — Data Science' },
+  { value: 'Electrical Engineering',                       label: 'EE — Electrical Engineering' },
+  { value: 'Chemical Engineering',                         label: 'Chem — Chemical Engineering' },
+  { value: 'Instrumentation Engineering',                  label: 'Inst — Instrumentation Engineering' },
+];
+
 const getPasswordStrength = (pass: string) => {
   if (!pass) return { score: 0, label: '', color: 'bg-[#e0e5e2]', textColor: 'text-[#9ca8a3]' };
   let score = 0;
@@ -342,8 +387,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
     if (getPasswordStrength(form.password).score < 4) {
       setError('Password must have 8+ chars, 1 uppercase, 1 number, and 1 symbol.'); return;
     }
-    if (role === 'student' && form.rollNumber && !/^[A-Za-z0-9]+$/.test(form.rollNumber)) {
-      setError('Roll number must be alphanumeric.'); return;
+    if (role === 'student' && form.rollNumber && !/^\d+$/.test(form.rollNumber)) {
+      setError('Roll number must be a numeric integer.'); return;
     }
 
     setLoading(true);
@@ -1047,10 +1092,28 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
                 {mode === 'signup' && role === 'student' && (
                   <>
                     <div className="grid grid-cols-2 gap-3">
-                      <Field label="Department" value={form.department}
-                             onChange={(v) => set('department', v)} placeholder="e.g. CSE" />
-                      <Field label="Roll Number" value={form.rollNumber}
-                             onChange={(v) => set('rollNumber', v)} placeholder="e.g. CS21B1034" />
+                      <SelectField
+                        label="Department"
+                        value={form.department}
+                        onChange={(v) => set('department', v)}
+                        options={DEPARTMENT_OPTIONS}
+                        placeholder="Select Branch"
+                      />
+                      <div>
+                        <label className="block text-[11px] font-bold text-[#5a6672] uppercase tracking-wide mb-1.5">Roll Number</label>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min={1}
+                          step={1}
+                          value={form.rollNumber}
+                          onChange={(e) => set('rollNumber', e.target.value.replace(/\D/g, ''))}
+                          placeholder="e.g. 1034"
+                          className="w-full py-3 px-4 rounded-xl border border-[#bfc9c3]/40 bg-[#f8fafe]
+                                     text-sm text-[#0b1c30] placeholder:text-[#c8d0cc]
+                                     focus:outline-none focus:border-[#003527] focus:ring-1 focus:ring-[#003527]/15"
+                        />
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
@@ -1077,35 +1140,31 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
                         </select>
                       </div>
                     </div>
-                    {/* Section — optional free text */}
-                    <div>
-                      <label className="block text-[11px] font-bold text-[#5a6672] uppercase tracking-wide mb-1.5">
-                        Class Section
-                        <span className="ml-1 text-[#9ca8a3] normal-case font-normal tracking-normal">(optional)</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={form.section}
-                        onChange={(e) => set('section', e.target.value.toUpperCase())}
-                        placeholder="e.g. A, B, TY-A, AIML-B  — leave blank if no section"
-                        className="w-full py-3 px-4 rounded-xl border border-[#bfc9c3]/40 bg-[#f8fafe]
-                                   text-sm text-[#0b1c30] placeholder:text-[#c8d0cc]
-                                   focus:outline-none focus:border-[#003527] focus:ring-1 focus:ring-[#003527]/15"
-                      />
-                      <p className="text-[10px] text-[#9ca8a3] mt-1.5">
-                        Type your section exactly (e.g. <strong>A</strong>, <strong>B</strong>, <strong>TY AIML</strong>).
-                        Leave blank if your class has no section split.
-                        This ensures you see the right timetable &amp; documents on your dashboard.
-                      </p>
-                    </div>
+                    {/* Section — dropdown A / B / C */}
+                    <SelectField
+                      label="Class Section (optional)"
+                      value={form.section}
+                      onChange={(v) => set('section', v)}
+                      options={[
+                        { value: 'A', label: 'Section A' },
+                        { value: 'B', label: 'Section B' },
+                        { value: 'C', label: 'Section C' },
+                      ]}
+                      placeholder="Select Section (leave if none)"
+                    />
                   </>
                 )}
 
                 {/* === SIGNUP — TEACHER extra fields === */}
                 {mode === 'signup' && role === 'teacher' && (
                   <div className="grid grid-cols-2 gap-3">
-                    <Field label="Department *" value={form.department}
-                           onChange={(v) => set('department', v)} placeholder="e.g. CSE" />
+                    <SelectField
+                      label="Department *"
+                      value={form.department}
+                      onChange={(v) => set('department', v)}
+                      options={DEPARTMENT_OPTIONS}
+                      placeholder="Select Branch"
+                    />
                     <Field label="Subject You Teach" value={form.subject}
                            onChange={(v) => set('subject', v)} placeholder="e.g. Data Structures" />
                   </div>

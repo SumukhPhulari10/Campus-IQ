@@ -36,6 +36,8 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [previewingUpload, setPreviewingUpload] = useState(false); // pre-publish preview modal
+  const [lastUploadedDoc, setLastUploadedDoc] = useState<CollegeDocument | null>(null); // for post-success actions
 
   // Uploaded materials list
   const [uploadedDocs, setUploadedDocs] = useState<CollegeDocument[]>([]);
@@ -240,6 +242,7 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
       }
 
       onDocumentAdded(serverDoc);
+      setLastUploadedDoc(serverDoc); // remember for post-success preview/delete
       setIsSuccess(true);
       setFile(null);
       setSelectedFileObj(null);
@@ -379,28 +382,68 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
           <>
             {/* Success Alert */}
             {isSuccess && (
-              <div className="mb-8 p-4 rounded-2xl bg-[#b0f0d6]/70 border border-[#003527]/30 text-[#002117] flex items-center justify-between animate-fade-in shadow-xs">
-                <div className="flex items-center gap-3">
-                  <span className="material-symbols-outlined text-[24px] text-[#003527]">check_circle</span>
-                  <div>
-                    <p className="font-bold text-sm">Document Published Successfully!</p>
-                    <p className="text-xs text-[#003527]">
-                      Students in the matching section can now view this document on their dashboard.
-                    </p>
+              <div className="mb-8 p-5 rounded-2xl bg-[#b0f0d6]/70 border border-[#003527]/30 text-[#002117] animate-fade-in shadow-xs">
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-3">
+                    <span className="material-symbols-outlined text-[28px] text-[#003527]">check_circle</span>
+                    <div>
+                      <p className="font-bold text-sm">Document Published Successfully!</p>
+                      <p className="text-xs text-[#003527] mt-0.5">
+                        Students in the matching section can now view this document on their dashboard.
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => { setActiveView('materials'); setIsSuccess(false); }}
-                    className="bg-[#003527] text-white text-xs font-bold px-4 py-2 rounded-xl shadow-xs"
-                  >
-                    View Materials
-                  </button>
                   <button
                     onClick={() => setIsSuccess(false)}
-                    className="text-xs font-bold px-3 py-2 text-[#003527] hover:bg-[#b0f0d6] rounded-xl"
+                    className="shrink-0 text-[#003527] hover:text-[#002117] transition-colors"
                   >
-                    Dismiss
+                    <span className="material-symbols-outlined text-[18px]">close</span>
+                  </button>
+                </div>
+                {/* Post-upload action buttons */}
+                <div className="flex flex-wrap gap-2">
+                  {/* Preview the just-uploaded doc */}
+                  {lastUploadedDoc && (
+                    <button
+                      onClick={() => setViewingDoc(lastUploadedDoc)}
+                      className="flex items-center gap-1.5 bg-white border border-[#003527]/30 text-[#003527] text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-[#f0fdf4] transition-colors shadow-xs"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">visibility</span>
+                      Preview Uploaded Doc
+                    </button>
+                  )}
+                  {/* Replace — upload a new file */}
+                  <label
+                    htmlFor="document-file-input"
+                    className="flex items-center gap-1.5 bg-white border border-[#bfc9c3]/50 text-[#5a6672] text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-[#f4f7ff] transition-colors shadow-xs cursor-pointer"
+                    title="Upload another document to replace this one"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">upload_file</span>
+                    Upload Another
+                  </label>
+                  {/* Delete the just-uploaded doc */}
+                  {lastUploadedDoc && (
+                    <button
+                      onClick={async () => {
+                        if (!confirm('Delete the document you just uploaded?')) return;
+                        await fetch(`/api/documents/${lastUploadedDoc.id}`, { method: 'DELETE' });
+                        onDocumentDeleted?.(lastUploadedDoc.id);
+                        setUploadedDocs(prev => prev.filter(d => d.id !== lastUploadedDoc.id));
+                        setLastUploadedDoc(null);
+                        setIsSuccess(false);
+                      }}
+                      className="flex items-center gap-1.5 bg-red-50 border border-red-200 text-red-600 text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-red-100 transition-colors shadow-xs"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">delete</span>
+                      Delete This Doc
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setActiveView('materials'); setIsSuccess(false); }}
+                    className="flex items-center gap-1.5 bg-[#003527] text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-[#064e3b] transition-colors shadow-xs"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">folder_open</span>
+                    View All Materials
                   </button>
                 </div>
               </div>
@@ -440,19 +483,71 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
 
                   {/* Selected File Badge */}
                   {file && (
-                    <div className="mt-6 w-full p-4 bg-[#f0fdf4] rounded-xl border border-[#b0f0d6] flex items-center justify-between text-left">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-[#b0f0d6] flex items-center justify-center">
-                          <span className="material-symbols-outlined text-[#003527] text-[20px]">picture_as_pdf</span>
+                    <div className="mt-6 w-full p-4 bg-[#f0fdf4] rounded-xl border border-[#b0f0d6] text-left">
+                      {/* File info row */}
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="w-10 h-10 rounded-xl bg-[#b0f0d6] flex items-center justify-center shrink-0">
+                          <span className="material-symbols-outlined text-[#003527] text-[20px]">
+                            {imagePreviewUrl ? 'image' : 'picture_as_pdf'}
+                          </span>
                         </div>
-                        <div>
-                          <p className="text-sm font-bold text-[#0b1c30]">{file.name}</p>
-                          <p className="text-xs text-[#707974]">{file.size} • Ready to publish</p>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-bold text-[#0b1c30] truncate">{file.name}</p>
+                          <p className="text-xs text-[#707974]">{file.size} · Ready to publish</p>
                         </div>
+                        <span className="shrink-0 text-[10px] font-bold text-[#003527] bg-[#b0f0d6] px-3 py-1 rounded-full">
+                          ✓ Selected
+                        </span>
                       </div>
-                      <span className="text-[10px] font-bold text-[#003527] bg-[#b0f0d6] px-3 py-1 rounded-full">
-                        ✓ Selected
-                      </span>
+
+                      {/* Thumbnail strip for images */}
+                      {imagePreviewUrl && (
+                        <div className="mb-3 rounded-xl overflow-hidden border border-[#b0f0d6] bg-[#0b1c30] flex items-center justify-center" style={{ maxHeight: '140px' }}>
+                          <img
+                            src={imagePreviewUrl}
+                            alt="Preview"
+                            className="max-h-[136px] w-auto object-contain"
+                          />
+                        </div>
+                      )}
+
+                      {/* Action buttons */}
+                      <div className="flex gap-2">
+                        {/* Preview full size */}
+                        {imagePreviewUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setPreviewingUpload(true)}
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#003527] text-white text-xs font-bold hover:bg-[#064e3b] transition-colors"
+                          >
+                            <span className="material-symbols-outlined text-[15px]">zoom_in</span>
+                            Preview Full
+                          </button>
+                        )}
+                        {/* Replace file */}
+                        <label
+                          htmlFor="document-file-input"
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-[#bfc9c3]/50 text-[#5a6672] text-xs font-bold hover:bg-[#f4f7ff] transition-colors cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-[15px]">swap_horiz</span>
+                          Change File
+                        </label>
+                        {/* Remove / clear selection */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFile(null);
+                            setSelectedFileObj(null);
+                            setImagePreviewUrl(null);
+                            setUploadError(null);
+                            if (fileInputRef.current) fileInputRef.current.value = '';
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-600 text-xs font-bold hover:bg-red-100 transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-[15px]">delete</span>
+                          Remove
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -899,6 +994,73 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
             setEditingDoc(null);
           }}
         />
+      )}
+
+      {/* ─── PRE-PUBLISH IMAGE PREVIEW MODAL ─── */}
+      {previewingUpload && imagePreviewUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+          onClick={() => setPreviewingUpload(false)}
+        >
+          <div
+            className="bg-[#0b1c30] rounded-3xl shadow-2xl flex flex-col overflow-hidden max-w-3xl w-full max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+              <div className="flex items-center gap-3">
+                <span className="material-symbols-outlined text-[#3cddc7] text-[22px]">image</span>
+                <div>
+                  <p className="text-white font-bold text-sm">{file?.name}</p>
+                  <p className="text-white/50 text-xs">{file?.size} · Pre-publish preview</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPreviewingUpload(false)}
+                className="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white/70 hover:text-white transition-colors"
+              >
+                <span className="material-symbols-outlined text-[18px]">close</span>
+              </button>
+            </div>
+            {/* Image */}
+            <div className="flex-1 overflow-auto flex items-center justify-center p-6">
+              <img
+                src={imagePreviewUrl}
+                alt="Document preview"
+                className="max-w-full max-h-[60vh] object-contain rounded-2xl shadow-xl"
+              />
+            </div>
+            {/* Footer actions */}
+            <div className="px-6 py-4 border-t border-white/10 flex gap-3">
+              <label
+                htmlFor="document-file-input"
+                onClick={() => setPreviewingUpload(false)}
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-colors cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[16px]">swap_horiz</span>
+                Change File
+              </label>
+              <button
+                onClick={() => {
+                  setFile(null); setSelectedFileObj(null);
+                  setImagePreviewUrl(null); setUploadError(null);
+                  if (fileInputRef.current) fileInputRef.current.value = '';
+                  setPreviewingUpload(false);
+                }}
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs font-bold transition-colors"
+              >
+                <span className="material-symbols-outlined text-[16px]">delete</span>
+                Remove File
+              </button>
+              <button
+                onClick={() => setPreviewingUpload(false)}
+                className="flex-1 py-2.5 rounded-xl bg-[#003527] hover:bg-[#064e3b] text-white text-xs font-bold transition-colors"
+              >
+                Looks Good — Continue
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
