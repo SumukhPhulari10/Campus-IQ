@@ -508,7 +508,10 @@ function AppShell({
               deadlines={deadlines}
               documents={documents}
               onOpenAIQuery={() => handleTabChange('assistant')}
-              onViewNotice={() => handleTabChange('notices')}
+              onViewNotice={(notice) => {
+                setSelectedNotice(notice);
+                handleTabChange('notices');
+              }}
               onNavigateTab={handleTabChange}
             />
           )

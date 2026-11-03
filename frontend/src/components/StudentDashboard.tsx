@@ -3,6 +3,7 @@ import { apiFetch as fetch } from '../lib/api';
 import { StudentProfile, Notice, DeadlineItem, CollegeDocument, StudentReview } from '../types';
 import { findNextClass, CSE_B_WEEKLY_SCHEDULE, DAY_NAMES, resolveScheduleFromDocs, isTimetableDoc } from '../lib/timetable';
 import { AcademicCalendarWidget } from './AcademicCalendarWidget';
+import { WhatToKnow } from './WhatToKnow';
 import { isDatePast, daysUntil } from '../lib/dateUtils';
 
 interface StudentDashboardProps {
@@ -305,6 +306,20 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
             Welcome to CampusIQ — your centralized college information hub.
           </p>
         </header>
+
+        <WhatToKnow
+          documents={allDocs}
+          notices={notices.filter(notice => {
+            const dept = (notice.department || '').trim().toLowerCase();
+            const studentDepartment = studentDept.trim().toLowerCase();
+            if (!dept || ['general academic', 'academic affairs', 'all'].includes(dept) || !studentDepartment) return true;
+            const studentIsCse = studentDepartment === 'cse' || studentDepartment.includes('computer science');
+            if (studentIsCse) return dept.includes('computer science') || dept.includes('cse');
+            return dept === studentDepartment || dept.includes(studentDepartment) || studentDepartment.includes(dept);
+          })}
+          onViewDocument={setViewingDoc}
+          onViewNotice={onViewNotice}
+        />
 
         {/* ── Main Grid ───────────────────────────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-7 mb-10">

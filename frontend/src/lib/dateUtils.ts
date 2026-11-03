@@ -12,14 +12,6 @@ export function parseFlexibleDate(input?: string | null): Date | null {
 
   const currentYear = new Date().getFullYear();
 
-  // 1. Standard ISO / native parseable (e.g. "2026-10-04", "Oct 04, 2026")
-  const d1 = new Date(s);
-  if (!isNaN(d1.getTime())) {
-    // Sanity: discard clearly wrong years
-    const y = d1.getFullYear();
-    if (y >= 2020 && y <= 2035) return d1;
-  }
-
   const MONTH_MAP: Record<string, number> = {
     jan: 0, january: 0,
     feb: 1, february: 1,
@@ -41,8 +33,28 @@ export function parseFlexibleDate(input?: string | null): Date | null {
    */
   const make = (day: number, month: number, year: number): Date | null => {
     if (month < 0 || month > 11 || day < 1 || day > 31) return null;
-    return new Date(year, month, day);
+    const date = new Date(year, month, day);
+    if (date.getFullYear() !== year || date.getMonth() !== month || date.getDate() !== day) return null;
+    return date;
   };
+
+  // Parse numeric dates before native Date parsing, which treats 04/11 as US month/day.
+  const isoMatch = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    return make(parseInt(isoMatch[3], 10), parseInt(isoMatch[2], 10) - 1, parseInt(isoMatch[1], 10));
+  }
+
+  const dmyMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (dmyMatch) {
+    return make(parseInt(dmyMatch[1], 10), parseInt(dmyMatch[2], 10) - 1, parseInt(dmyMatch[3], 10));
+  }
+
+  // 1. Standard native parseable dates (e.g. "Oct 04, 2026")
+  const d1 = new Date(s);
+  if (!isNaN(d1.getTime())) {
+    const y = d1.getFullYear();
+    if (y >= 2020 && y <= 2035) return d1;
+  }
 
   const lower = s.toLowerCase();
 
@@ -68,12 +80,6 @@ export function parseFlexibleDate(input?: string | null): Date | null {
     const year = monthFirst[3] ? parseInt(monthFirst[3], 10) : currentYear;
     const month = MONTH_MAP[monthStr];
     if (month !== undefined) return make(day, month, year);
-  }
-
-  // 4. dd/mm/yyyy or dd-mm-yyyy
-  const dmyMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if (dmyMatch) {
-    return make(parseInt(dmyMatch[1], 10), parseInt(dmyMatch[2], 10) - 1, parseInt(dmyMatch[3], 10));
   }
 
   return null;

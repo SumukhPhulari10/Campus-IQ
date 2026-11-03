@@ -34,21 +34,27 @@ export function parseDateToKey(input?: string): string | null {
   const s = input.trim();
   if (!s) return null;
 
+  const toKey = (year: number, month: number, day: number): string | null => {
+    const date = new Date(year, month - 1, day);
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  };
+
+  // Parse numeric dates before native Date parsing, which treats 04/11 as US month/day.
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) return toKey(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+
+  const ddmmyyyy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (ddmmyyyy) {
+    return toKey(Number(ddmmyyyy[3]), Number(ddmmyyyy[2]), Number(ddmmyyyy[1]));
+  }
+
   // 1. Direct standard Date parsing
   const d = new Date(s);
   if (!isNaN(d.getTime())) {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  }
-
-  // 2. Handle DD/MM/YYYY or DD-MM-YYYY
-  const ddmmyyyy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-  if (ddmmyyyy) {
-    const day = String(ddmmyyyy[1]).padStart(2, '0');
-    const m = String(ddmmyyyy[2]).padStart(2, '0');
-    const y = ddmmyyyy[3];
     return `${y}-${m}-${day}`;
   }
 

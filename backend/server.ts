@@ -8,6 +8,7 @@ import jwt from 'jsonwebtoken';
 import { pool, initDb } from './src/lib/db';
 import { sendOTPEmail, sendSignupOTPEmail } from './src/lib/mailer';
 import { generatePdfDataUrl } from './src/lib/pdfGenerator';
+import { extractDeadlineDate, parseDateToIso } from './src/lib/noticeDates';
 import multer from 'multer';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -21,6 +22,26 @@ async function extractPdfText(buf: Buffer): Promise<string> {
   } finally {
     try { await parser.destroy(); } catch (_) {}
   }
+}
+
+async function extractScannedPdfText(buf: Buffer): Promise<string> {
+  const gemini = getGeminiClient();
+  if (!gemini) return '';
+
+  return callGeminiWithFallback(gemini, [{
+    role: 'user',
+    parts: [
+      {
+        inlineData: {
+          mimeType: 'application/pdf',
+          data: buf.toString('base64'),
+        },
+      },
+      {
+        text: 'Transcribe all readable text from this college document exactly, preserving dates, names, IDs, and table rows. Do not summarize or infer missing text. Return only the transcription; if no text is readable, return an empty response.',
+      },
+    ],
+  }]);
 }
 
 dotenv.config();
@@ -596,7 +617,8 @@ app.post('/api/documents/upload', upload.single('file'), async (req: any, res) =
       'guidelines', 'code of conduct', 'hostel', 'mess', 'library', 'laboratory', 'lab',
       'practical', 'viva', 'project', 'convocation', 'graduation', 'result', 'grade',
       'marks', 'cgpa', 'sgpa', 'holiday', 'orientation', 'induction', 'alumni', 'meeting',
-      'lecture', 'class', 'session', 'batch', 'branch', 'section', 'celebration', 'blood donation'
+      'lecture', 'class', 'session', 'batch', 'branch', 'section', 'celebration', 'blood donation',
+      'btech', 'cse', 'defaulter', 'defaulters', 'arrears', 'backlog', 'roll number'
     ];
 
     const scoreAcademicKeywords = (text: string): number => {
@@ -765,20 +787,30 @@ Respond STRICTLY in valid JSON format with NO Markdown wrappers:
         fileType = 'pdf';
         const base64Data = uploadedFile.buffer.toString('base64');
         fileUrl = `data:application/pdf;base64,${base64Data}`;
+        let pdfParseError: string | null = null;
         try {
           contentRaw = await extractPdfText(uploadedFile.buffer);
           console.log(`[Upload] Extracted ${contentRaw.length} chars from PDF "${title}"`);
         } catch (pdfErr: any) {
-          console.warn('[Upload] PDF parse failed:', pdfErr.message);
-          return res.status(400).json({
-            error: 'Document rejected: The PDF file could not be read or is corrupt. Please upload a valid document.'
-          });
+          pdfParseError = pdfErr.message || String(pdfErr);
+          console.warn('[Upload] PDF text extraction failed:', pdfParseError);
         }
 
-        // Check if PDF is empty
+        // Scanned PDFs have nonzero bytes but no text layer, so try OCR before rejecting.
         if (!contentRaw || contentRaw.trim().length < 20) {
+          try {
+            contentRaw = await extractScannedPdfText(uploadedFile.buffer);
+          } catch (ocrErr: any) {
+            console.error('[Upload] Scanned PDF OCR failed:', ocrErr.message || ocrErr);
+          }
+        }
+
+        if (!contentRaw || contentRaw.trim().length < 20) {
+          const error = pdfParseError
+            ? 'The PDF is not empty, but readable text could not be extracted. Scanned PDFs require OCR; check the OCR service configuration or upload a searchable PDF.'
+            : 'The PDF is not empty, but it contains no readable text layer. Scanned PDFs require OCR; check the OCR service configuration or upload a searchable PDF.';
           return res.status(400).json({
-            error: 'Document rejected: The uploaded PDF is empty or contains no readable text. Please upload a valid document with notice or academic content.'
+            error: `Document rejected: ${error}`
           });
         }
 
@@ -845,28 +877,12 @@ Respond STRICTLY in valid JSON format with NO Markdown wrappers:
     const yearMatch = contentRaw.match(/(20\d{2})[\s\-–]+(20\d{2})/);
     if (yearMatch) docYear = `${yearMatch[1]}-${yearMatch[2]}`;
 
-// Intelligent date / deadline extractor from document content or title
-function extractDeadlineDate(text: string): string | null {
-  if (!text) return null;
-  const patterns = [
-    /(?:deadline|last date|due date|register by|registration deadline|registration ends|ends on|event date|action by)[:\s]+([A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{4})?|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}(?:\s+\d{4})?|\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i,
-    /(\d{1,2}(?:st|nd|rd|th)?\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)(?:\s+\d{4})?)/i,
-    /((?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{4})?)/i,
-  ];
-
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m && m[1]) {
-      return m[1].trim();
-    }
-  }
-  return null;
-}
-
     const totalChunks = Math.max(4, Math.ceil(contentRaw.length / 180));
     const summary = body.summary || `${category} document for ${department}${section ? ` (Section ${section})` : ''}.`;
 
-    const actionRequiredDate = body.actionRequiredDate || body.actionDate || extractDeadlineDate(title + ' ' + contentRaw) || null;
+    const actionRequiredDateCandidate =
+      body.actionRequiredDate || body.actionDate || extractDeadlineDate(title + ' ' + contentRaw);
+    const actionRequiredDate = parseDateToIso(actionRequiredDateCandidate) || actionRequiredDateCandidate || null;
 
     // Guarantee that fileUrl is always generated and saved in DB for non-image documents (PDFs, text notices, circulars)
     if (!fileUrl && fileType !== 'image') {
@@ -1353,65 +1369,6 @@ app.delete('/api/notices/:id', async (req, res) => {
     return res.status(500).json({ error: 'Failed to delete notice' });
   }
 });
-
-// Helper to parse dates into ISO YYYY-MM-DD
-function parseDateToIso(input?: string): string | null {
-  if (!input) return null;
-  const s = input.trim();
-  if (!s) return null;
-
-  const d = new Date(s);
-  if (!isNaN(d.getTime())) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  }
-
-  const ddmmyyyy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-  if (ddmmyyyy) {
-    const day = String(ddmmyyyy[1]).padStart(2, '0');
-    const m = String(ddmmyyyy[2]).padStart(2, '0');
-    const y = ddmmyyyy[3];
-    return `${y}-${m}-${day}`;
-  }
-
-  const monthMap: Record<string, string> = {
-    jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
-    jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
-    january: '01', february: '02', march: '03', april: '04', june: '06',
-    july: '07', august: '08', september: '09', october: '10', november: '11', december: '12'
-  };
-
-  const match = s.match(/([a-zA-Z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})/i) ||
-                s.match(/(\d{1,2})(?:st|nd|rd|th)?\s+([a-zA-Z]+),?\s+(\d{4})/i);
-  if (match) {
-    let mPart = match[1].toLowerCase();
-    let dPart = match[2];
-    let yPart = match[3];
-    if (!monthMap[mPart] && monthMap[match[2]?.toLowerCase()]) {
-      mPart = match[2].toLowerCase();
-      dPart = match[1];
-    }
-    const mm = monthMap[mPart];
-    if (mm) {
-      return `${yPart}-${mm}-${String(dPart).padStart(2, '0')}`;
-    }
-  }
-
-  const rangeMatch = s.match(/(\d{1,2})(?:st|nd|rd|th)?\s*([a-zA-Z]{3,9})?(?:\s*-\s*\d{1,2}(?:st|nd|rd|th)?)?\s*([a-zA-Z]{3,9})\s*(\d{4})?/i);
-  if (rangeMatch) {
-    const day = rangeMatch[1];
-    const mStr = (rangeMatch[2] || rangeMatch[3] || '').toLowerCase();
-    const y = rangeMatch[4] || '2026';
-    const mm = monthMap[mStr];
-    if (mm) {
-      return `${y}-${mm}-${String(day).padStart(2, '0')}`;
-    }
-  }
-
-  return null;
-}
 
 // GET all academic calendar events, synced with live database documents and notices
 app.get('/api/calendar-events', async (req, res) => {

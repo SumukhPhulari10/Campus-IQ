@@ -1192,7 +1192,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
                         {mode === 'login' ? 'login' : 'person_add'}
                       </span>
                       {mode === 'login'
-                        ? `Sign in as ${role === 'student' ? 'Student' : role === 'teacher' ? 'Teacher' : 'Admin'}`
+                        ? 'Sign In'
                         : `Create ${role === 'student' ? 'Student' : role === 'teacher' ? 'Teacher' : 'Admin'} Account`}
                     </>
                   )}
