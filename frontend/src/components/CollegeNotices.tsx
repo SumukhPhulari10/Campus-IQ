@@ -93,7 +93,9 @@ export const CollegeNotices: React.FC<CollegeNoticesProps> = ({
     }
 
     const noticeCategory = String(n.category || '').toLowerCase();
-    const isTimetable = noticeCategory === 'timetable' || /timetable|schedule|time table/i.test(n.title || '');
+    const isTimetable = noticeCategory === 'timetable' ||
+      /timetable|schedule|time table/i.test(n.title || '') ||
+      n.tags?.some(tag => /timetable|schedule/i.test(tag));
     const isExam = noticeCategory === 'exams' || /exam|midterm|test|endsem|assessment/i.test(n.title || '');
 
     const matchesCategory =

@@ -15,6 +15,10 @@ Run locally with `npm run dev`. The API listens on `PORT` (default `3000`). Run 
 
 SQL migrations and database scripts are in `sql/`. The server also initializes its tables on startup.
 
+## Student guides and translation
+
+Admin and teacher uploads can target the student guide. Image extraction and on-demand English-to-Marathi translation require `GEMINI_API_KEY` in the backend environment. The upload flow extracts a text preview first and only saves the guide after staff review and approval; approved guide content is also indexed for AI queries and is not published as a notice.
+
 ## Deployment
 
 Configure the frontend build with `VITE_API_BASE_URL` set to this service's public origin. Keep all backend secrets in the backend host's environment variables; never add them to the frontend build.

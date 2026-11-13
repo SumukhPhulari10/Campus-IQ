@@ -4,6 +4,7 @@ import { StudentProfile, Notice, DeadlineItem, CollegeDocument, StudentReview } 
 import { findNextClass, CSE_B_WEEKLY_SCHEDULE, DAY_NAMES, resolveScheduleFromDocs, isTimetableDoc } from '../lib/timetable';
 import { AcademicCalendarWidget } from './AcademicCalendarWidget';
 import { WhatToKnow } from './WhatToKnow';
+import { SectionTranslation } from './SectionTranslation';
 import { isDatePast, daysUntil } from '../lib/dateUtils';
 
 interface StudentDashboardProps {
@@ -82,6 +83,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewMessage, setReviewMessage] = useState('');
   const [activeDay, setActiveDay] = useState<string>('MON');
+  const [translationEnabled, setTranslationEnabled] = useState(false);
   const [deadlinePriorityFilter, setDeadlinePriorityFilter] = useState<'all' | 'high' | 'medium' | 'normal'>('all');
   const [urgentAlertDismissed, setUrgentAlertDismissed] = useState<boolean>(() => {
     try {
@@ -131,7 +133,6 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
     return () => { cancelled = true; clearInterval(interval); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentDept]);
-
   useEffect(() => {
     let cancelled = false;
     const fetchReviews = async () => {
@@ -201,7 +202,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
     };
 
     for (const d of [...dbDocs, ...documents]) {
-      if (!seen.has(d.id) && isRelevantDept(d.department)) {
+      if (d.targetBucket !== 'ai_bucket' && !seen.has(d.id) && isRelevantDept(d.department)) {
         seen.add(d.id);
         merged.push(d);
       }
@@ -209,11 +210,16 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
     return merged;
   }, [dbDocs, documents, studentDept]);
 
+  const dashboardDocs = React.useMemo(
+    () => allDocs.filter(document => document.targetBucket !== 'student_guide'),
+    [allDocs],
+  );
+
   // Resolve schedule dynamically from uploaded documents, falling back to CSE_B_WEEKLY_SCHEDULE
   const currentSchedule = React.useMemo(() => {
-    const resolved = resolveScheduleFromDocs(allDocs);
+    const resolved = resolveScheduleFromDocs(dashboardDocs);
     return resolved.schedule || CSE_B_WEEKLY_SCHEDULE;
-  }, [allDocs]);
+  }, [dashboardDocs]);
 
   // Real-time next class dynamically updated from current schedule for the green widget
   const nextClassInfo = React.useMemo(() => findNextClass(currentSchedule), [currentSchedule]);
@@ -243,7 +249,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   }, [currentSchedule]);
 
   // Recently uploaded docs (last 5) — exclude timetable PDFs so they don't duplicate on top and stay low in notices
-  const recentDocs = allDocs.filter(d => !isTimetableDoc(d)).slice(0, 5);
+  const recentDocs = dashboardDocs.filter(d => !isTimetableDoc(d)).slice(0, 5);
 
   const getCategoryIcon = (cat: string) => {
     switch (cat) {
@@ -305,6 +311,32 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
           <p className="font-inter text-[0.9375rem] text-[#5a6672] max-w-2xl leading-relaxed">
             Welcome to CampusIQ — your centralized college information hub.
           </p>
+          <div className="mt-4 flex min-w-0 flex-col items-start gap-2">
+            <button
+              type="button"
+              aria-pressed={translationEnabled}
+              onClick={() => setTranslationEnabled(enabled => !enabled)}
+              className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-bold shadow-sm transition-all
+                          ${translationEnabled
+                            ? 'border-[#003527] bg-[#003527] text-white'
+                            : 'border-[#b0f0d6] bg-white text-[#003527] hover:bg-[#effaf5]'}`}
+            >
+              <span className="material-symbols-outlined text-[18px]">translate</span>
+              {translationEnabled ? 'Translation tools are on' : 'Translate sections'}
+              <span className={`relative h-5 w-9 rounded-full transition-colors ${translationEnabled ? 'bg-[#80bea6]' : 'bg-[#cbd5e1]'}`}>
+                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-[left] duration-200 ease-in-out ${translationEnabled ? 'left-[18px]' : 'left-0.5'}`} />
+              </span>
+            </button>
+            <span className="block max-w-2xl text-xs leading-relaxed text-[#707974]">
+              {translationEnabled
+                ? 'Choose Marathi on any section you want translated.'
+                : 'Turn on to show Marathi translation buttons throughout your dashboard.'}
+            </span>
+          </div>
+          <SectionTranslation
+            text={`Welcome to CampusIQ, ${student.name} — your centralized college information hub.`}
+            enabled={translationEnabled}
+          />
         </header>
 
         <WhatToKnow
@@ -319,6 +351,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
           })}
           onViewDocument={setViewingDoc}
           onViewNotice={onViewNotice}
+          translationEnabled={translationEnabled}
         />
 
         {/* ── Main Grid ───────────────────────────────────────────── */}
@@ -332,11 +365,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 <span className="material-symbols-outlined text-[#003527] text-[22px]">space_dashboard</span>
                 Central Information Hub
               </h2>
-              {!docsLoading && allDocs.length > 0 && (
+              <SectionTranslation text="Central Information Hub" enabled={translationEnabled} />
+              {!docsLoading && dashboardDocs.length > 0 && (
                 <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-[#003527]
                                  bg-[#b0f0d6]/35 px-3 py-1 rounded-full border border-[#80bea6]/40">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#003527] animate-pulse" />
-                  Live · {allDocs.length} documents
+                  Live · {dashboardDocs.length} documents
                 </span>
               )}
             </div>
@@ -453,6 +487,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                                           ${docCompleted ? 'text-[#9ca3af]' : 'text-[#707974]'}`}>
                               {(doc.summary || '').replace(/Indexed with \d+ semantic chunks\.?/gi, '').trim() || doc.title}
                             </p>
+                            <SectionTranslation
+                              text={`${doc.title}\n${(doc.summary || '').replace(/Indexed with \d+ semantic chunks\.?/gi, '').trim()}`}
+                              enabled={translationEnabled}
+                            />
 
                             <div className="flex items-center gap-3 mt-2 text-[11px] text-[#9ca8a3]">
                               <span className="flex items-center gap-1">
@@ -475,7 +513,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               );
             })()}
 
-            {docsLoading && allDocs.length === 0 && (
+            {docsLoading && dashboardDocs.length === 0 && (
               <div className="card p-8 animate-pulse space-y-3">
                 <div className="h-16 bg-[#e5eeff] rounded-xl w-full" />
                 <div className="h-16 bg-[#e5eeff]/70 rounded-xl w-full" />
@@ -483,7 +521,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               </div>
             )}
 
-            {!docsLoading && allDocs.length === 0 && (
+            {!docsLoading && dashboardDocs.length === 0 && (
               <div className="card p-10 text-center">
                 <div className="w-16 h-16 rounded-2xl bg-[#eff4ff] flex items-center justify-center mx-auto mb-4">
                   <span className="material-symbols-outlined text-[32px] text-[#003527]">description</span>
@@ -511,6 +549,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                     <p className="text-[11px] text-[#9ca8a3]">
                       Centralized updates for all students
                     </p>
+                    <SectionTranslation
+                      text="Notices and announcements. Centralized updates for all students."
+                      enabled={translationEnabled}
+                    />
                   </div>
                 </div>
                 {notices.length > 0 && (
@@ -627,6 +669,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                             <p className="text-xs text-[#707974] line-clamp-1 leading-relaxed">
                               {(notice.aiSummary || '').replace(/Indexed with \d+ semantic chunks\.?/gi, '').trim()}
                             </p>
+                            <SectionTranslation
+                              text={`${notice.title}\n${(notice.aiSummary || '').replace(/Indexed with \d+ semantic chunks\.?/gi, '').trim()}`}
+                              enabled={translationEnabled}
+                            />
                           </div>
                           <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                             <span className="material-symbols-outlined text-[16px] text-[#003527]">arrow_forward</span>
@@ -639,8 +685,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
               })()}
 
               {notices.filter(
-                n => n.category !== 'Timetable' &&
-                     !n.title.toLowerCase().includes('timetable') &&
+                 n => !n.title.toLowerCase().includes('timetable') &&
                      !n.title.toLowerCase().includes(' cse b tt') &&
                      !isDatePast(n.actionRequiredDate)
               ).length > 4 && (
@@ -661,11 +706,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
             {/* ── Academic & Events Calendar Widget (Real-Time Dropdown) ── */}
             <AcademicCalendarWidget
               notices={notices}
-              documents={allDocs}
+              documents={dashboardDocs}
               onOpenAIQuery={onOpenAIQuery}
               onViewNotice={onViewNotice}
               onViewDoc={(doc) => setViewingDoc(doc)}
               defaultExpanded={true}
+              translationEnabled={translationEnabled}
             />
 
             {/* ── Deadline Timeline — horizontal pipe ────────────────── */}
@@ -682,6 +728,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                     <p className="text-[11px] text-[#9ca8a3]">
                       Real-time dates from official notices &amp; circulars
                     </p>
+                    <SectionTranslation
+                      text="Upcoming deadlines. Real-time dates from official notices and circulars."
+                      enabled={translationEnabled}
+                    />
                   </div>
                 </div>
 
@@ -788,6 +838,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                                     {dl.title}
                                   </p>
                                   <p className="text-[11px] text-[#9ca8a3] line-clamp-2 leading-relaxed">{dl.description}</p>
+                                  <SectionTranslation
+                                    text={`${dl.title}\n${dl.description}`}
+                                    enabled={translationEnabled}
+                                  />
                                 </div>
                               </div>
                             );
@@ -826,6 +880,10 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
 
                 <h4 className="font-bold text-lg mb-1">{nextClassInfo.name}</h4>
                 <p className="text-xs text-[#80bea6] mb-4 font-mono">{nextClassInfo.code}</p>
+                <SectionTranslation
+                  text={`Next Class: ${nextClassInfo.name}\n${nextClassInfo.dayLabel || nextClassInfo.dayName}\n${nextClassInfo.time}\nRoom: ${nextClassInfo.room}\nInstructor: ${nextClassInfo.instructor}`}
+                  enabled={translationEnabled}
+                />
 
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm text-white/90">
@@ -862,6 +920,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 <span className="material-symbols-outlined text-[20px] text-[#003527]">bolt</span>
                 Quick Actions
               </h3>
+              <SectionTranslation text="Quick Actions: All Notices, AI Assistant, My Profile, and Academic Calendar." enabled={translationEnabled} />
               <div className="space-y-2.5">
                 <button
                   onClick={() => onNavigateTab('notices')}
@@ -944,8 +1003,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
             {/* ── Completed / Past Events Sidebar Widget ───────────── */}
             {(() => {
               const completedNotices = notices.filter(
-                n => n.category !== 'Timetable' &&
-                     !n.title.toLowerCase().includes('timetable') &&
+                 n => !n.title.toLowerCase().includes('timetable') &&
                      !n.title.toLowerCase().includes(' cse b tt') &&
                      isDatePast(n.actionRequiredDate)
               );

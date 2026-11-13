@@ -11,6 +11,7 @@ import { generatePdfDataUrl } from './src/lib/pdfGenerator';
 import { extractDeadlineDate, parseDateToIso } from './src/lib/noticeDates';
 import multer from 'multer';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'node:url';
 const _require = createRequire(import.meta.url);
 const { PDFParse } = _require('pdf-parse');
 
@@ -44,7 +45,7 @@ async function extractScannedPdfText(buf: Buffer): Promise<string> {
   }]);
 }
 
-dotenv.config();
+dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) });
 
 const app = express();
 const allowedOrigins = new Set(
@@ -72,11 +73,36 @@ app.use(express.json({ limit: '50mb' }));
 // Multer: in-memory storage (we don't need to save files to disk)
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
+app.post('/api/translate', async (req, res) => {
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (!text || text.length > 20000) {
+    return res.status(400).json({ error: 'Text must be between 1 and 20000 characters.' });
+  }
+
+  const gemini = getGeminiClient();
+  if (!gemini) {
+    return res.status(503).json({ error: 'Translation is unavailable because the AI service is not configured.' });
+  }
+
+  try {
+    const translatedText = await callGeminiWithFallback(gemini, [{
+      role: 'user',
+      parts: [{
+        text: `Translate the following student-facing college information from English into clear, simple Marathi. Preserve all names, dates, numbers, amounts, document labels, and URLs exactly. Do not add, remove, or infer requirements. Return only the translation.\n\n${text}`,
+      }],
+    }]);
+    return res.json({ translatedText });
+  } catch (error: any) {
+    console.error('[Translation] Marathi translation failed:', error.message || error);
+    return res.status(502).json({ error: 'Could not translate this section right now. Please try again.' });
+  }
+});
+
 // Lazy-initialized Gemini client
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey || /^(your[_ -]?gemini[_ -]?key[_ -]?here|replace[_ -]?me)$/i.test(apiKey)) return null;
   if (!aiClient) {
     aiClient = new GoogleGenAI({ apiKey });
   }
@@ -270,6 +296,9 @@ app.post('/api/query', async (req, res) => {
     const { query, studentContext, conversationHistory } = req.body;
     if (!query || !query.trim()) {
       return res.status(400).json({ error: 'Query is required' });
+    }
+    if (query.length > 12000) {
+      return res.status(413).json({ error: 'Please keep your question under 12,000 characters.' });
     }
 
     // Always pull a fresh batch from DB so newly uploaded docs are found
@@ -594,6 +623,9 @@ app.post('/api/documents/upload', upload.single('file'), async (req: any, res) =
     const title       = body.title       || 'Uploaded College Document';
     const department  = body.department  || 'General Academic';
     const category    = body.category    || 'Circular';
+    const isStudentGuideUpload = body.targetBucket === 'student_guide';
+    const isScholarshipGuide = isStudentGuideUpload &&
+      /scholarship|financial aid/i.test(`${title} ${category}`);
     const section     = body.section     || null;
     const uploadedBy  = body.uploadedBy  || null;
     const publishedDate = body.publishedDate || new Date().toISOString().split('T')[0];
@@ -680,9 +712,47 @@ app.post('/api/documents/upload', upload.single('file'), async (req: any, res) =
 
         // ── Multimodal AI Vision Scanner (if Gemini client is active) ──
         let aiVerified = false;
-        try {
-          const gemini = getGeminiClient();
-          if (gemini && process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_key_here') {
+        if (isScholarshipGuide) {
+          if (body.approvedContent !== undefined) {
+            contentRaw = String(body.approvedContent).trim();
+            aiVerified = true;
+          } else {
+            const gemini = getGeminiClient();
+            if (!gemini) {
+              return res.status(503).json({
+                error: 'Automatic image reading is unavailable because the AI service is not configured. Configure GEMINI_API_KEY and try again.',
+              });
+            }
+            try {
+              const extractedText = await callGeminiWithFallback(gemini, [{
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: { mimeType, data: base64Data },
+                  },
+                  {
+                    text: `Read this scholarship application document checklist image and transcribe every visible word into a clean, student-friendly checklist. Preserve each heading and keep each document under the exact category where it appears (for example SC/ST, OBC/SBC, EBC). Do not omit repeated items. Do not invent, normalize, or guess names, dates, eligibility rules, or requirements. If a word is genuinely unreadable, write "[unclear — please verify]" in that item. Return only the transcription, with a heading and bullet/numbered lists. The staff member will review it against the original before publishing.`,
+                  },
+                ],
+              }]);
+              if (!extractedText || extractedText.trim().length < 20) {
+                return res.status(422).json({
+                  error: 'The AI could not read enough text from this image. Upload a clearer image and try again.',
+                });
+              }
+              contentRaw = `${title} (${category})\n\n${extractedText.trim()}`;
+              aiVerified = true;
+            } catch (aiErr: any) {
+              console.error('[Scholarship Guide] Automatic image extraction failed:', aiErr.message || aiErr);
+              return res.status(502).json({
+                error: 'Automatic image reading failed. Please try again; no guide was published.',
+              });
+            }
+          }
+        } else {
+          try {
+            const gemini = getGeminiClient();
+            if (gemini && process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_key_here') {
             const aiText = await callGeminiWithFallback(gemini, [
               {
                 role: 'user',
@@ -699,6 +769,7 @@ Examine this uploaded image and determine if it is a legitimate college/universi
 
 ACCEPTED:
 - Official college notices, circulars, announcements, orders, timetables, exam schedules, syllabus sheets, fee notices.
+- When the upload is a student guide, official student checklists, scholarship/financial-aid required-document lists, and clear photographs or scans of those materials.
 - College event posters (e.g. hackathons, coding contests, workshops, seminars, guest lectures, cultural fests, sports meets, club recruitments, webinars).
 
 STRICTLY REJECTED:
@@ -724,7 +795,11 @@ Respond STRICTLY in valid JSON format with NO Markdown wrappers:
             const rawText = aiText?.replace(/```json/g, '').replace(/```/g, '').trim() || '{}';
             const parsed = JSON.parse(rawText);
 
-            if (parsed.isValidNotice === false) {
+            const extractedText = typeof parsed.extractedText === 'string' ? parsed.extractedText.trim() : '';
+            const isReadableScholarshipGuide = isScholarshipGuide &&
+              extractedText.length >= 15 &&
+              /scholarship|financial aid|caste|income|domicile|document|certificate/i.test(extractedText);
+            if (parsed.isValidNotice === false && !isReadableScholarshipGuide) {
               console.warn(`[Upload Scanner] AI rejected image: ${parsed.rejectionReason}`);
               return res.status(400).json({
                 error: parsed.rejectionReason || 'Document rejected: The uploaded file was identified as a personal photo or non-official image. Only official college notices, circulars, and academic event posters are permitted.'
@@ -739,8 +814,9 @@ Respond STRICTLY in valid JSON format with NO Markdown wrappers:
               body.actionRequiredDate = parsed.actionDate;
             }
           }
-        } catch (aiErr: any) {
-          console.warn('[Upload Scanner] AI Vision check fallback to heuristics:', aiErr.message);
+          } catch (aiErr: any) {
+            console.warn('[Upload Scanner] AI Vision check fallback to heuristics:', aiErr.message);
+          }
         }
 
         // ── Heuristic Verification (if AI not active or fallback) ──
@@ -771,14 +847,15 @@ Respond STRICTLY in valid JSON format with NO Markdown wrappers:
           // Without AI vision, we cannot verify image content, so the title + category
           // MUST contain at least 2 academic/institutional keywords to be accepted.
           const imageAcademicScore = scoreAcademicKeywords(title + ' ' + (category || '') + ' ' + (department || ''));
-          if (imageAcademicScore < 2) {
+          const minimumAcademicScore = isScholarshipGuide ? 1 : 2;
+          if (imageAcademicScore < minimumAcademicScore) {
             return res.status(400).json({
-              error: 'Document rejected: Image uploads must be official college notices or event posters. Please ensure the title clearly describes the notice or event (e.g. "Annual Hackathon Poster", "Exam Schedule Notice", "Workshop Registration Circular").'
+              error: 'Document rejected: Image uploads must be official college materials. For a student guide, choose a relevant category such as Scholarships or Financial Aid and provide a descriptive title.'
             });
           }
         }
 
-        if (!contentRaw || contentRaw.length < 5) {
+        if ((!contentRaw || contentRaw.length < 5) && !(isStudentGuideUpload && body.previewOnly === 'true')) {
           contentRaw = `${title} — Official Event Poster / Notice Image.\nPublished for ${department} (${category}).`;
         }
         console.log(`[Upload] Verified & processed image poster "${title}" (${fileSize})`);
@@ -866,10 +943,32 @@ Respond STRICTLY in valid JSON format with NO Markdown wrappers:
     }
 
     // If still empty, reject
-    if (!contentRaw || contentRaw.trim().length < 5) {
+    if ((!contentRaw || contentRaw.trim().length < 5) && !(isStudentGuideUpload && body.previewOnly === 'true')) {
       return res.status(400).json({
         error: 'Document rejected: Content cannot be empty. Please provide valid notice or document information.'
       });
+    }
+
+    if (body.previewOnly === 'true') {
+      if (body.targetBucket !== 'student_guide') {
+        return res.status(400).json({ error: 'Text preview is only available for student guide uploads.' });
+      }
+      return res.json({
+        preview: true,
+        extractedContent: contentRaw.slice(0, 20000),
+        truncated: contentRaw.length > 20000,
+      });
+    }
+
+    if (body.approvedContent !== undefined) {
+      const approvedContent = String(body.approvedContent).trim();
+      if (approvedContent.length < 15 || approvedContent.length > 20000) {
+        return res.status(400).json({ error: 'Reviewed guide text must be between 15 and 20000 characters.' });
+      }
+      if (scoreAcademicKeywords(`${approvedContent} ${title} ${category}`) === 0) {
+        return res.status(400).json({ error: 'Reviewed text must include relevant official college or scholarship information.' });
+      }
+      contentRaw = approvedContent;
     }
 
     const id = `doc_${Date.now()}`;
@@ -902,7 +1001,10 @@ Respond STRICTLY in valid JSON format with NO Markdown wrappers:
       }
     }
 
-    const targetBucket: 'dashboard' | 'ai_bucket' = (body.targetBucket === 'ai_bucket' ? 'ai_bucket' : 'dashboard');
+    const targetBucket: 'dashboard' | 'ai_bucket' | 'student_guide' =
+      body.targetBucket === 'ai_bucket' || body.targetBucket === 'student_guide'
+        ? body.targetBucket
+        : 'dashboard';
 
     const newDoc = {
       id,
@@ -944,7 +1046,7 @@ Respond STRICTLY in valid JSON format with NO Markdown wrappers:
     let newNotice: any = null;
     let noticeTags: string[] = [];
 
-    if (targetBucket !== 'ai_bucket') {
+    if (targetBucket === 'dashboard') {
       const isExam = category === 'Exams' || /exam|midterm|test|endsem|assessment/i.test(title);
       const isTimetable = category === 'Timetable' || /timetable|schedule|time table/i.test(title);
       const isEvent = category === 'Events' || (fileType === 'image' && /hackathon|fest|contest|event|competition|workshop|webinar/i.test(title));
@@ -1113,7 +1215,7 @@ app.get('/api/notices', async (req, res) => {
         d.file_url,
         ARRAY[d.category, d.department]
       FROM documents d
-      WHERE (d.target_bucket IS NULL OR d.target_bucket != 'ai_bucket')
+      WHERE (d.target_bucket IS NULL OR d.target_bucket NOT IN ('ai_bucket', 'student_guide'))
         AND NOT EXISTS (
           SELECT 1 FROM notices n WHERE n.source_doc_id = d.id OR n.id = 'not_' || d.id
         );
@@ -1133,7 +1235,7 @@ app.get('/api/notices', async (req, res) => {
               action_required_date, ai_summary, full_content, source_doc_id,
               image_url, file_url, tags, created_at
        FROM notices
-       WHERE (target_bucket IS NULL OR target_bucket != 'ai_bucket')
+       WHERE (target_bucket IS NULL OR target_bucket NOT IN ('ai_bucket', 'student_guide'))
        ORDER BY created_at DESC`
     );
 
@@ -1221,9 +1323,9 @@ app.get('/api/documents/for-student', async (req, res) => {
     // Build query: fetch docs matching department AND (section matches OR section is null/all)
     let query = `SELECT id, title, department, category, academic_year, published_date,
                         file_type, file_size, status, total_chunks, summary, content_raw, section,
-                        uploaded_by_id, image_url, file_url, action_required_date, created_at
+                        uploaded_by_id, image_url, file_url, action_required_date, target_bucket, created_at
                  FROM documents
-                 WHERE 1=1`;
+                 WHERE (target_bucket IS NULL OR target_bucket != 'ai_bucket')`;
     const params: any[] = [];
 
     if (department) {
@@ -1273,6 +1375,7 @@ app.get('/api/documents/for-student', async (req, res) => {
         fileUrl:       row.file_url || imgUrl,
         imageUrl:      imgUrl,
         actionRequiredDate: row.action_required_date || undefined,
+        targetBucket: row.target_bucket || 'dashboard',
         createdAt: row.created_at,
       };
     });
@@ -1502,10 +1605,91 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-function sendMockSMS(phone: string, otp: string) {
-  console.log(`\n\n💬 [SMS MOCK] ================================`);
-  console.log(`💬 Sending OTP ${otp} to mobile number ${phone}`);
-  console.log(`💬 ===========================================\n\n`);
+function normalizeIndianPhone(phone: string): string {
+  const trimmedPhone = phone.trim();
+  if (trimmedPhone.startsWith('+')) return trimmedPhone;
+  return `+91${trimmedPhone}`;
+}
+
+function getTwilioVerifyConfig() {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
+  const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
+  const serviceSid = process.env.TWILIO_VERIFY_SERVICE_SID?.trim();
+
+  if (!accountSid || !authToken || !serviceSid) {
+    throw new Error(
+      'Twilio Verify is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_VERIFY_SERVICE_SID in backend/.env.',
+    );
+  }
+
+  return { accountSid, authToken, serviceSid };
+}
+
+async function getTwilioError(response: Response, phone: string): Promise<Error> {
+  let details: { code?: number | string; message?: string } = {};
+  try {
+    details = await response.json() as { code?: number | string; message?: string };
+  } catch {
+    // Keep the HTTP status useful if Twilio returns a non-JSON error.
+  }
+
+  const safeMessage = details.message
+    ?.replaceAll(normalizeIndianPhone(phone), '[phone]')
+    .replaceAll(phone, '[phone]');
+  const code = details.code ? `, Twilio code ${details.code}` : '';
+  const message = safeMessage ? `: ${safeMessage}` : '';
+  return new Error(`Twilio Verify request failed (HTTP ${response.status}${code})${message}`);
+}
+
+async function sendTwilioVerification(phone: string): Promise<void> {
+  const { accountSid, authToken, serviceSid } = getTwilioVerifyConfig();
+  const body = new URLSearchParams({
+    To: normalizeIndianPhone(phone),
+    Channel: 'sms',
+  });
+  const response = await fetch(
+    `https://verify.twilio.com/v2/Services/${encodeURIComponent(serviceSid)}/Verifications`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+    },
+  );
+
+  if (!response.ok) {
+    throw await getTwilioError(response, phone);
+  }
+}
+
+async function checkTwilioVerification(phone: string, code: string): Promise<boolean> {
+  const { accountSid, authToken, serviceSid } = getTwilioVerifyConfig();
+  const body = new URLSearchParams({
+    To: normalizeIndianPhone(phone),
+    Code: code,
+  });
+  const response = await fetch(
+    `https://verify.twilio.com/v2/Services/${encodeURIComponent(serviceSid)}/VerificationCheck`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+    },
+  );
+
+  if (!response.ok) {
+    const error = await getTwilioError(response, phone);
+    if (response.status === 404 && error.message.includes('Twilio code 20404')) return false;
+    throw error;
+  }
+
+  const result = await response.json() as { status?: string };
+  return result.status === 'approved';
 }
 
 // Local demonstration account. It is created only when the database is available
@@ -1531,42 +1715,28 @@ async function ensureDemoAdmin() {
   }
 }
 
-// SIGNUP — email optional for students (mobile mandatory); teacher/admin require email
+// SIGNUP — every account requires a verified email address
 app.post('/api/auth/signup', async (req, res) => {
   try {
     if (!pool) return res.status(503).json({ error: 'Database not connected' });
 
-    const { name, email, password, role, department, year, semester, rollNumber,
-            phone, subject, employeeId } = req.body;
+    const { name, password, role, department, year, semester, rollNumber,
+            subject, employeeId } = req.body;
+    const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
 
-    if (!name || !password || !role) {
-      return res.status(400).json({ error: 'Name, password, and role are required.' });
+    if (!name || !email || !password || !role) {
+      return res.status(400).json({ error: 'Name, email, password, and role are required.' });
     }
     if (!['student', 'admin', 'teacher'].includes(role)) {
       return res.status(400).json({ error: 'Invalid role.' });
     }
-    // Phone required only for students
-    if (role === 'student' && !phone) {
-      return res.status(400).json({ error: 'Mobile number is required for students.' });
-    }
-    // Email required for admin and teacher
-    if ((role === 'admin' || role === 'teacher') && !email) {
-      return res.status(400).json({ error: 'Email address is required for this role.' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Enter a valid email address.' });
     }
 
-    // Check email uniqueness if provided
-    if (email) {
-      const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-      if (existing.rows.length > 0) {
-        return res.status(409).json({ error: 'An account with this email already exists.' });
-      }
-    }
-    // Check phone uniqueness if provided
-    if (phone) {
-      const existingPhone = await pool.query('SELECT id FROM users WHERE phone_number = $1', [phone]);
-      if (existingPhone.rows.length > 0) {
-        return res.status(409).json({ error: 'An account with this mobile number already exists.' });
-      }
+    const existing = await pool.query('SELECT id FROM users WHERE LOWER(email) = $1', [email]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'An account with this email already exists.' });
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
@@ -1574,9 +1744,8 @@ app.post('/api/auth/signup', async (req, res) => {
 
     // Always require OTP verification
     const autoVerified = false;
-    const verificationMethod = email ? 'email' : 'sms';
     const verificationToken = generateOTP();
-    const tokenExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+    const tokenExpires = new Date(Date.now() + 10 * 60 * 1000);
 
     await pool.query(
       `INSERT INTO users
@@ -1587,31 +1756,27 @@ app.post('/api/auth/signup', async (req, res) => {
       [name, email || null, passwordHash, role,
        department || null, year || null, semester || null, rollNumber || null,
        avatarUrl, autoVerified, verificationToken, tokenExpires,
-       phone || null, subject || null, employeeId || null, req.body.section || null]
+       null, subject || null, employeeId || null, req.body.section || null]
     );
 
-    if (verificationMethod === 'email') {
-      try {
-        await sendSignupOTPEmail(email, name, verificationToken);
-      } catch (mailErr: any) {
-        console.warn('OTP email failed to send:', mailErr.message);
-      }
+    try {
+      await sendSignupOTPEmail(email, name, verificationToken);
+    } catch (mailErr: any) {
+      console.error('Signup OTP email failed:', mailErr.message);
       return res.status(201).json({
-        verificationSent: true,
+        verificationSent: false,
         method: 'email',
         identifier: email,
-        message: `An OTP has been sent to ${email}.`,
-      });
-    } else {
-      // Send mock SMS
-      sendMockSMS(phone, verificationToken);
-      return res.status(201).json({
-        verificationSent: true,
-        method: 'sms',
-        identifier: phone,
-        message: `An OTP has been sent to your mobile number.`,
+        message: 'Your account was created, but the verification email could not be sent. Check the email settings or try resending.',
       });
     }
+
+    return res.status(201).json({
+      verificationSent: true,
+      method: 'email',
+      identifier: email,
+      message: `An OTP has been sent to ${email}.`,
+    });
   } catch (err: any) {
     console.error('Signup error:', err);
     return res.status(500).json({ error: 'Failed to create account. Please try again.' });
@@ -1624,26 +1789,40 @@ app.post('/api/auth/verify-signup-otp', async (req, res) => {
     if (!pool) return res.status(503).json({ error: 'Database not connected' });
 
     // identifier can be email or phone
-    const { identifier, otp } = req.body;
+    const { identifier, otp, method } = req.body;
     if (!identifier || !otp) return res.status(400).json({ error: 'Identifier and OTP are required.' });
 
-    const result = await pool.query(
-      `SELECT id, email_verified, verification_token_expires
-       FROM users WHERE (email = $1 OR phone_number = $1) AND verification_token = $2`,
-      [identifier, otp]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(400).json({ error: 'Invalid OTP.' });
+    let user: { id: string; email_verified: boolean; verification_token_expires?: Date | string | null };
+    if (method === 'sms') {
+      const result = await pool.query(
+        `SELECT id, email_verified FROM users WHERE phone_number = $1`,
+        [identifier],
+      );
+      if (result.rows.length === 0) return res.status(400).json({ error: 'Invalid OTP.' });
+      user = result.rows[0];
+      if (user.email_verified) {
+        return res.status(400).json({ error: 'Account already verified.' });
+      }
+      if (!await checkTwilioVerification(identifier, String(otp))) {
+        return res.status(400).json({ error: 'Invalid or expired OTP.' });
+      }
+    } else {
+      const result = await pool.query(
+        `SELECT id, email_verified, verification_token_expires
+         FROM users WHERE (email = $1 OR phone_number = $1) AND verification_token = $2`,
+        [identifier, otp]
+      );
+      if (result.rows.length === 0) {
+        return res.status(400).json({ error: 'Invalid OTP.' });
+      }
+      user = result.rows[0];
     }
-
-    const user = result.rows[0];
 
     if (user.email_verified) {
       return res.status(400).json({ error: 'Account already verified.' });
     }
 
-    if (new Date() > new Date(user.verification_token_expires)) {
+    if (method !== 'sms' && new Date() > new Date(user.verification_token_expires!)) {
       return res.status(400).json({ error: 'OTP has expired. Please request a new one.' });
     }
 
@@ -1666,7 +1845,7 @@ app.post('/api/auth/resend-verification', async (req, res) => {
   try {
     if (!pool) return res.status(503).json({ error: 'Database not connected' });
 
-    const { identifier } = req.body; // Can be email or phone, but this endpoint defaults to email if exists
+    const { identifier } = req.body;
     if (!identifier) return res.status(400).json({ error: 'Identifier is required.' });
 
     const result = await pool.query(
@@ -1690,7 +1869,8 @@ app.post('/api/auth/resend-verification', async (req, res) => {
     try {
       await sendSignupOTPEmail(user.email, user.name, verificationToken);
     } catch (mailErr: any) {
-      console.warn('Resend OTP email failed:', mailErr.message);
+      console.error('Resend OTP email failed:', mailErr.message);
+      return res.status(502).json({ error: 'Could not send the verification email. Check the SMTP configuration and try again.' });
     }
 
     return res.json({ sent: true });
@@ -1719,15 +1899,13 @@ app.post('/api/auth/resend-otp-sms', async (req, res) => {
     }
 
     const user = result.rows[0];
-    const verificationToken = generateOTP();
-    const tokenExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+
+    await sendTwilioVerification(user.phone_number);
 
     await pool.query(
-      `UPDATE users SET verification_token = $1, verification_token_expires = $2 WHERE id = $3`,
-      [verificationToken, tokenExpires, user.id]
+      `UPDATE users SET verification_token = NULL, verification_token_expires = NULL WHERE id = $1`,
+      [user.id],
     );
-
-    sendMockSMS(user.phone_number, verificationToken);
 
     return res.json({ sent: true, method: 'sms' });
   } catch (err: any) {

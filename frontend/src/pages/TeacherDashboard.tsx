@@ -507,6 +507,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             </div>
           </div>
           <UploadDocument
+            user={user}
             onDocumentAdded={onDocumentAdded}
             onDocumentDeleted={onDocumentDeleted}
             onNavigateTab={(tab) => {

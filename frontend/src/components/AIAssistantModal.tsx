@@ -66,6 +66,7 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           query: queryText,
+          conversationHistory: messages.slice(-6).map((m) => ({ role: m.sender, text: m.text })),
           studentContext: {
             name: student.name,
             department: student.department,
@@ -77,7 +78,9 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
         }),
       });
 
-      const ragData: RAGQueryResponse = await response.json();
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'The assistant is temporarily unavailable. Please try again.');
+      const ragData: RAGQueryResponse = payload;
 
       const assistantMsg: Message = {
         id: `ast_${Date.now()}`,
@@ -90,37 +93,13 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (error) {
       console.error('Failed to query RAG backend:', error);
-      const fallbackMsg: Message = {
+      const errorMsg: Message = {
         id: `ast_${Date.now()}`,
         sender: 'assistant',
-        text: `According to our official 2024-25 Student Regulations and Academic Handbook:\n\n• Minimum Attendance Required: 75% across all courses.\n• Prerequisite for CS301: CS101 and MAT201.\n• Grade Re-evaluation: Allowed within 14 days of result declaration.\n\nPlease refer to the official Examination Cell notice board for more detailed requests.`,
+        text: error instanceof Error ? error.message : 'The assistant is temporarily unavailable. Please check your connection and try again.',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        ragData: {
-          answer: 'Information retrieved from 2024 Student Handbook.',
-          citations: [
-            {
-              chunkId: 'chk_hb_01',
-              documentId: 'doc_handbook_2024',
-              documentTitle: '2024 Student Handbook',
-              department: 'Dean of Students',
-              pageNumber: 42,
-              sectionHeader: '4.1 Attendance Minimums',
-              exactQuote: 'Every registered student is mandated to maintain a minimum attendance of 75% in each enrolled theory and practical course.',
-              confidence: 0.98,
-            },
-          ],
-          groundedAnswerRate: 94.7,
-          confidenceScore: 98,
-          isGrounded: true,
-          needsReview: false,
-          escalationNeeded: false,
-          suggestedFollowUps: [
-            'How do I file for medical attendance condonation?',
-            'What is the re-evaluation processing fee?',
-          ],
-        },
       };
-      setMessages((prev) => [...prev, fallbackMsg]);
+      setMessages((prev) => [...prev, errorMsg]);
     } finally {
       setIsLoading(false);
     }
@@ -268,7 +247,7 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
                             Priority Emergency Case Manager Assigned
                           </span>
                           <span className="bg-[#855300] text-white px-2 py-0.5 rounded text-[10px]">
-                            {msg.ragData.ticketId || 'Ticket #8942'}
+                            Priority support
                           </span>
                         </div>
                         <p className="text-xs">
@@ -429,12 +408,18 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
           }}
           className="p-4 bg-white border-t border-[#bfc9c3]/30 flex items-center gap-3 shrink-0"
         >
-          <input
-            type="text"
+          <textarea
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSendQuery(query);
+              }
+            }}
+            rows={1}
             placeholder="Ask anything (e.g. attendance rules, exam dates, syllabus, grievances)..."
-            className="flex-1 bg-[#f8f9ff] border border-[#bfc9c3]/40 rounded-xl px-4 py-3 text-sm text-[#0b1c30] focus:outline-none focus:border-[#003527] focus:ring-1 focus:ring-[#003527]"
+            className="flex-1 max-h-36 resize-y bg-[#f8f9ff] border border-[#bfc9c3]/40 rounded-xl px-4 py-3 text-sm text-[#0b1c30] focus:outline-none focus:border-[#003527] focus:ring-1 focus:ring-[#003527]"
             id="rag-modal-query-input"
           />
           <button

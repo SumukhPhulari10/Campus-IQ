@@ -3,6 +3,7 @@ import { apiFetch as fetch } from '../lib/api';
 import { CollegeDocument } from '../types';
 import { AuthUser } from '../types';
 import { TextNoticeUpload } from './TextNoticeUpload';
+import { TextStudentGuideUpload } from './TextStudentGuideUpload';
 
 interface UploadDocumentProps {
   onDocumentAdded: (doc: CollegeDocument) => void;
@@ -48,7 +49,7 @@ const PdfViewer = ({ fileSource, title }: { fileSource: string; title: string })
   );
 };
 
-type UploadView = 'upload' | 'text-notice' | 'materials' | 'ai-bucket';
+type UploadView = 'upload' | 'text-notice' | 'text-guide' | 'materials' | 'ai-bucket';
 
 export const UploadDocument: React.FC<UploadDocumentProps> = ({
   onDocumentAdded,
@@ -57,14 +58,15 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
   user,
 }) => {
   const [activeView, setActiveView] = useState<UploadView>('upload');
-  const [targetBucket, setTargetBucket] = useState<'dashboard' | 'ai_bucket'>('dashboard');
+  const [targetBucket, setTargetBucket] = useState<'dashboard' | 'ai_bucket' | 'student_guide'>('dashboard');
+  const [guideDraftContent, setGuideDraftContent] = useState<string | null>(null);
   const [file, setFile] = useState<{ name: string; size: string } | null>(null);
   const [selectedFileObj, setSelectedFileObj] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
 
   const [title, setTitle] = useState('');
   const [department, setDepartment] = useState(user?.department || 'Computer Science & Engineering');
-  const [category, setCategory] = useState<'Events' | 'Circular' | 'Exams' | 'Syllabus' | 'Regulations' | 'Handbook' | 'Financial Aid' | 'Timetable' | 'Placements'>('Syllabus');
+  const [category, setCategory] = useState<'Events' | 'Circular' | 'Exams' | 'Syllabus' | 'Regulations' | 'Handbook' | 'Financial Aid' | 'Scholarships' | 'Timetable' | 'Placements'>('Syllabus');
   const [section, setSection] = useState('');
   const [publishedDate, setPublishedDate] = useState(new Date().toISOString().split('T')[0]);
   const [actionRequiredDate, setActionRequiredDate] = useState('');
@@ -160,6 +162,7 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
     }
 
     setSelectedFileObj(selected);
+    setGuideDraftContent(null);
     setFile({
       name: selected.name,
       size: `${(selected.size / (1024 * 1024)).toFixed(1)} MB`,
@@ -286,6 +289,11 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
         formData.append('actionRequiredDate', actionRequiredDate.trim());
       }
       formData.append('targetBucket', targetBucket);
+      if (targetBucket === 'student_guide' && guideDraftContent === null) {
+        formData.append('previewOnly', 'true');
+      } else if (targetBucket === 'student_guide') {
+        formData.append('approvedContent', guideDraftContent);
+      }
 
       const res = await fetch('/api/documents/upload', {
         method: 'POST',
@@ -296,6 +304,11 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
       if (!res.ok || data.error) {
         setUploadError(data.error || 'Document rejected: verification failed.');
         setIsProcessing(false);
+        return;
+      }
+
+      if (data.preview) {
+        setGuideDraftContent(data.extractedContent || '');
         return;
       }
 
@@ -317,6 +330,7 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
       setTitle('');
       setSection('');
       setActionRequiredDate('');
+      setGuideDraftContent(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err: any) {
       console.warn('Upload network error:', err);
@@ -401,6 +415,16 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
               Publish Text Notice
             </button>
             <button
+              onClick={() => { setActiveView('text-guide'); setUploadError(null); }}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all
+                ${activeView === 'text-guide'
+                  ? 'bg-[#003527] text-white shadow-sm'
+                  : 'text-[#9ca8a3] hover:text-[#003527]'}`}
+            >
+              <span className="material-symbols-outlined text-[18px]">menu_book</span>
+              Text Student Guide
+            </button>
+            <button
               onClick={() => { setActiveView('materials'); setUploadError(null); }}
               className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all
                 ${activeView === 'materials'
@@ -449,6 +473,17 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
             onDocumentAdded={(doc) => {
               onDocumentAdded(doc);
               setUploadedDocs(prev => [doc, ...prev]);
+            }}
+            onViewMaterials={() => setActiveView('materials')}
+          />
+        )}
+
+        {activeView === 'text-guide' && (
+          <TextStudentGuideUpload
+            user={user}
+            onDocumentAdded={(doc) => {
+              onDocumentAdded(doc);
+              setUploadedDocs(prev => [doc, ...prev.filter(item => item.id !== doc.id)]);
             }}
             onViewMaterials={() => setActiveView('materials')}
           />
@@ -780,18 +815,20 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
                     )}
 
 
-                    {/* Destination Bucket: Notice Board vs AI Knowledge Bucket */}
+                    {/* Destination: notice board, AI-only, or reviewed student guide */}
                     <div>
                       <label className="block text-xs font-bold text-[#404944] uppercase mb-1.5 flex items-center justify-between">
                         <span>Publish Target</span>
                         <span className="text-[10px] text-[#003527] font-semibold">
-                          {targetBucket === 'dashboard' ? '📢 Student Dashboard + AI' : '🧠 AI Knowledge Bucket Only'}
+                          {targetBucket === 'dashboard'
+                            ? '📢 Notice Board + AI'
+                            : targetBucket === 'ai_bucket' ? '🧠 AI Knowledge Bucket Only' : '📘 Student Guide + AI'}
                         </span>
                       </label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <button
                           type="button"
-                          onClick={() => setTargetBucket('dashboard')}
+                          onClick={() => { setTargetBucket('dashboard'); setGuideDraftContent(null); }}
                           className={`p-3 rounded-xl border text-left transition-all ${
                             targetBucket === 'dashboard'
                               ? 'border-[#003527] bg-[#eff4ff] text-[#003527] font-bold shadow-xs'
@@ -808,7 +845,7 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
                         </button>
                         <button
                           type="button"
-                          onClick={() => setTargetBucket('ai_bucket')}
+                          onClick={() => { setTargetBucket('ai_bucket'); setGuideDraftContent(null); }}
                           className={`p-3 rounded-xl border text-left transition-all ${
                             targetBucket === 'ai_bucket'
                               ? 'border-[#003527] bg-[#e8f5ef] text-[#003527] font-bold shadow-xs'
@@ -823,8 +860,59 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
                             Direct AI brain (keeps dashboard clean)
                           </p>
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => { setTargetBucket('student_guide'); setGuideDraftContent(null); }}
+                          className={`p-3 rounded-xl border text-left transition-all ${
+                            targetBucket === 'student_guide'
+                              ? 'border-[#003527] bg-[#fff8e7] text-[#003527] font-bold shadow-xs'
+                              : 'border-[#bfc9c3]/40 bg-white text-[#5a6672] hover:bg-[#f8f9ff]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5 text-xs mb-1">
+                            <span className="material-symbols-outlined text-[16px]">menu_book</span>
+                            Student Guide
+                          </div>
+                          <p className="text-[10px] text-[#707974] font-normal leading-tight">
+                            Review extracted text; show in What to Know and AI, not as a notice
+                          </p>
+                        </button>
                       </div>
                     </div>
+
+                    {targetBucket === 'student_guide' && guideDraftContent === null && (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-900">
+                        Automatic reading uses the backend Gemini AI key. The file is not published yet; select <strong>Extract &amp; Review Guide</strong> to read it and preview the recognized text first.
+                      </div>
+                    )}
+                    {targetBucket === 'student_guide' && guideDraftContent !== null && (
+                      <div className="space-y-2 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
+                        <label htmlFor="guide-extracted-content" className="block text-xs font-bold text-[#003527]">
+                          Review and correct extracted guide text
+                        </label>
+                        <p className="text-[11px] leading-relaxed text-[#53645c]">
+                          Check every eligibility group, document name, amount, and date against the original. Only the text you approve will be published.
+                        </p>
+                        {!guideDraftContent.trim() && (
+                          <p role="status" className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
+                            No text was extracted automatically. Enter the checklist from the original image below; at least 15 characters are required.
+                          </p>
+                        )}
+                        <textarea
+                          id="guide-extracted-content"
+                          value={guideDraftContent}
+                          onChange={event => setGuideDraftContent(event.target.value)}
+                          maxLength={20000}
+                          minLength={15}
+                          required
+                          rows={10}
+                          className="w-full resize-y rounded-xl border border-emerald-200 bg-white p-3 text-xs leading-relaxed text-[#0b1c30] focus:outline-none focus:ring-2 focus:ring-[#003527]/20"
+                        />
+                        <p className="text-right text-[10px] text-[#707974]">
+                          {guideDraftContent.length}/20000 characters
+                        </p>
+                      </div>
+                    )}
 
                     {/* Published Date */}
                     <div>
@@ -892,9 +980,13 @@ export const UploadDocument: React.FC<UploadDocumentProps> = ({
                         ) : (
                           <>
                             <span className="material-symbols-outlined text-[18px]">
-                              {targetBucket === 'ai_bucket' ? 'psychology' : 'publish'}
+                              {targetBucket === 'ai_bucket' ? 'psychology' : targetBucket === 'student_guide' ? 'fact_check' : 'publish'}
                             </span>
-                            {targetBucket === 'ai_bucket' ? '🧠 Train & Save to AI Bucket' : 'Publish to Dashboard'}
+                            {targetBucket === 'ai_bucket'
+                              ? '🧠 Train & Save to AI Bucket'
+                              : targetBucket === 'student_guide'
+                                ? guideDraftContent === null ? 'Extract & Review Guide' : 'Approve & Publish Student Guide'
+                                : 'Publish to Dashboard'}
                           </>
                         )}
                       </button>

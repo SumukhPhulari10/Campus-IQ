@@ -12,6 +12,7 @@
 - 📅 **Schedules & Academic Calendar**: Real-time timetables, event schedules, exam notifications, and semester milestones.
 - 📊 **Academic & Attendance Tracking**: Monitor course attendance, internal assessments, and performance metrics.
 - 📄 **Document & Knowledge Base**: Upload campus PDFs, syllabi, and circulars with automated text extraction and vector search.
+- 🌱 **Student Guides & Marathi Translation**: Review extracted guide text before publishing it to What to Know, and translate individual student-facing sections into Marathi on demand.
 - ✉️ **Announcements & Notifications**: Instant campus-wide broadcasts and automated email alerts via Nodemailer.
 
 ---

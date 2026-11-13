@@ -92,7 +92,7 @@ export interface CollegeDocument {
   id: string;
   title: string;
   department: string;
-  category: 'Syllabus' | 'Regulations' | 'Circular' | 'Handbook' | 'Financial Aid' | 'Placements' | 'Hostel' | 'Timetable' | 'Events' | 'Exams' | 'Academic';
+  category: 'Syllabus' | 'Regulations' | 'Circular' | 'Handbook' | 'Financial Aid' | 'Scholarships' | 'Placements' | 'Hostel' | 'Timetable' | 'Events' | 'Exams' | 'Academic';
   academicYear: string;
   publishedDate: string;
   fileType: 'pdf' | 'docx' | 'txt' | 'web' | 'image';
@@ -107,7 +107,7 @@ export interface CollegeDocument {
   section?: string;
   uploadedBy?: string;
   actionRequiredDate?: string;
-  targetBucket?: 'dashboard' | 'ai_bucket';
+  targetBucket?: 'dashboard' | 'ai_bucket' | 'student_guide';
   createdAt?: string;
 }
 

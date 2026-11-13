@@ -310,7 +310,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
 
   const [role, setRole] = useState<Role>('student');
   const [form, setForm] = useState({
-    name: '', email: '', password: '', phone: '',
+    name: '', email: '', password: '',
     department: '', year: '', semester: '', rollNumber: '', section: '',
     adminCode: '', teacherCode: '', subject: '', employeeId: '',
   });
@@ -322,8 +322,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
   const [newPassword, setNewPassword]   = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [pendingEmail, setPendingEmail] = useState(''); // email used during signup
-  const [pendingPhone, setPendingPhone] = useState('');
-  const [verificationMethod, setVerificationMethod] = useState<'email' | 'sms'>('email');
+  const [otpNeedsResend, setOtpNeedsResend] = useState(false);
 
   const [error,   setError]   = useState('');
   // Pre-populate success if user just verified email
@@ -356,30 +355,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
       setError('Name must contain only letters and spaces.'); return;
     }
 
-    // Phone mandatory for students only
-    if (role === 'student' && !form.phone.trim()) {
-      setError('Mobile number is required.'); return;
+    if (!form.email.trim()) {
+      setError('Email address is required.'); return;
     }
-    if (form.phone.trim()) {
-      const phone = form.phone.trim();
-      if (!/^[0-9]{10}$/.test(phone)) {
-        setError('Mobile number must be exactly 10 digits.'); return;
-      }
-      if (!/^[789]/.test(phone)) {
-        setError('Please enter a valid Indian mobile number (must start with 7, 8, or 9).'); return;
-      }
-      if (/^(\d)\1{9}$/.test(phone)) {
-        setError('Please enter a valid mobile number (e.g. 0000000000 is not accepted).'); return;
-      }
-    }
-
-    // Email required for teacher
-    if (role === 'teacher' && !form.email.trim()) {
-      setError('Email address is required for teacher registration.'); return;
-    }
-    // Validate email format if provided — must contain @
-    if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-      setError('Please enter a valid email address (must contain @).'); return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      setError('Please enter a valid email address.'); return;
     }
 
     if (!form.password.trim()) {
@@ -399,10 +379,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name:        form.name,
-          email:       form.email   || undefined,
+          email:       form.email.trim(),
           password:    form.password,
           role,
-          phone:       form.phone      || undefined,
           department:  form.department || undefined,
           year:        form.year       || undefined,
           semester:    form.semester   || undefined,
@@ -415,18 +394,14 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Something went wrong.'); return; }
 
-      // Mobile-only student — auto-verified, go straight to login
-      if (data.autoVerified) {
-        setSuccess('✅ Account created! You can now sign in with your mobile number.');
-        setMode('login');
-        return;
-      }
-
       // Needs OTP Verification
-      setPendingEmail(form.email || data.identifier);
-      setPendingPhone(form.phone || data.identifier);
-      setVerificationMethod(data.method || 'email');
+      setPendingEmail(form.email.trim());
+      setOtp('');
+      setOtpNeedsResend(data.verificationSent === false);
       setMode('verify-pending');
+      if (data.verificationSent === false) {
+        setError(data.message || 'Your account was created, but the OTP could not be sent. Please resend it.');
+      }
     } catch {
       setError('Cannot connect to server. Is the dev server running?');
     } finally {
@@ -512,7 +487,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
       const res = await fetch('/api/auth/verify-signup-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: verificationMethod === 'email' ? pendingEmail : pendingPhone, otp }),
+        body: JSON.stringify({
+          identifier: pendingEmail,
+          otp,
+          method: 'email',
+        }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Invalid OTP.'); return; }
@@ -585,36 +564,15 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
     clearAlerts();
     setLoading(true);
     try {
-      const endpoint = verificationMethod === 'email' ? '/api/auth/resend-verification' : '/api/auth/resend-otp-sms';
-      const res = await fetch(endpoint, {
+      const res = await fetch('/api/auth/resend-verification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: verificationMethod === 'email' ? pendingEmail : pendingPhone }),
+        body: JSON.stringify({ identifier: pendingEmail }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Failed to resend email.'); return; }
-      setSuccess(verificationMethod === 'email' ? 'A new verification email has been sent.' : 'A new OTP has been sent via SMS.');
-    } catch {
-      setError('Cannot connect to server.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleResendSMSFallback = async () => {
-    clearAlerts();
-    setLoading(true);
-    try {
-      const res = await fetch('/api/auth/resend-otp-sms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: pendingEmail || pendingPhone }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Failed to resend SMS.'); return; }
-      setSuccess('A new OTP has been sent via SMS.');
-      setVerificationMethod('sms');
-      setOtp('');
+      setOtpNeedsResend(false);
+      setSuccess('A new verification email has been sent.');
     } catch {
       setError('Cannot connect to server.');
     } finally {
@@ -680,11 +638,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
               <BackBtn to="login" label="Back to Sign In" />
               <div className="mb-6">
                 <h1 className="font-headline text-2xl font-extrabold text-[#0b1c30] mb-1">
-                  {verificationMethod === 'email' ? 'Check your inbox!' : 'Check your phone!'}
+                  Check your inbox!
                 </h1>
                 <p className="text-sm text-[#9ca8a3]">
                   A 6-digit verification code was sent to <strong className="text-[#003527]">
-                    {verificationMethod === 'email' ? pendingEmail : pendingPhone}
+                    {pendingEmail}
                   </strong>
                 </p>
               </div>
@@ -716,20 +674,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
                   {loading ? 'Verifying…' : 'Verify Account'}
                 </button>
 
-                {verificationMethod === 'email' && pendingPhone && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      clearAlerts();
-                      setOtp('');
-                      await handleResendSMSFallback();
-                    }}
-                    className="text-xs text-amber-700 font-bold hover:underline bg-amber-50 p-2 rounded-lg border border-amber-200"
-                  >
-                    💬 Having trouble with email? Send OTP via SMS instead
-                  </button>
-                )}
-
                 <button
                   type="button"
                   onClick={async () => {
@@ -737,7 +681,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
                     setOtp('');
                     await handleResendVerification();
                   }}
-                  disabled={otpRemaining > 540} // allow resend after 1 min
+                  disabled={!otpNeedsResend && otpRemaining > 540} // allow resend after 1 min
                   className="text-xs text-[#003527] font-bold hover:underline disabled:text-[#9ca8a3] disabled:no-underline"
                 >
                   Resend OTP
@@ -842,7 +786,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
                     setOtp('');
                     handleForgotPassword(new Event('submit') as unknown as React.FormEvent);
                   }}
-                  disabled={otpRemaining > 540} // allow resend after 1 min
+                  disabled={!otpNeedsResend && otpRemaining > 540} // allow resend after 1 min
                   className="text-xs text-[#003527] font-bold hover:underline disabled:text-[#9ca8a3] disabled:no-underline"
                 >
                   Resend OTP
@@ -1021,30 +965,18 @@ export const AuthPage: React.FC<AuthPageProps> = ({ initialMode = 'login', onLog
                   />
                 )}
 
-                {/* === SIGNUP: Mobile Number — student only === */}
-                {mode === 'signup' && role === 'student' && (
-                  <Field
-                    label="Mobile Number *"
-                    type="tel"
-                    value={form.phone}
-                    onChange={(v) => set('phone', v.replace(/\D/g, '').slice(0, 10))}
-                    placeholder="e.g. 9876543210"
-                  />
-                )}
-
-                {/* === SIGNUP: Email — optional for student, required for teacher/admin === */}
+                {/* === SIGNUP: Email — required for every role === */}
                 {mode === 'signup' && (
                   <Field
-                    label={role === 'student' ? 'College Email (optional)' : 'Email Address *'}
+                    label="Email Address *"
                     type="email"
                     value={form.email}
                     onChange={(v) => set('email', v)}
                     placeholder={
-                      role === 'student' ? 'you@university.edu — skip if you don\'t have one'
+                      role === 'student' ? 'you@university.edu'
                       : role === 'teacher' ? 'teacher@university.edu'
                       : 'admin@university.edu'
                     }
-                    hint={role === 'student' ? "No college email yet? Leave blank — your mobile number is enough to sign in." : undefined}
                     accent={role === 'admin' ? 'amber' : 'green'}
                   />
                 )}

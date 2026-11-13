@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { apiFetch as fetch } from '../lib/api';
 import { Notice, CollegeDocument } from '../types';
+import { SectionTranslation } from './SectionTranslation';
 
 export interface CalendarEventItem {
   id: string;
@@ -26,6 +27,7 @@ interface AcademicCalendarWidgetProps {
   onViewNotice?: (notice: Notice) => void;
   onViewDoc?: (doc: CollegeDocument) => void;
   defaultExpanded?: boolean;
+  translationEnabled?: boolean;
 }
 
 // Robust date string normalizer to YYYY-MM-DD
@@ -133,6 +135,7 @@ export const AcademicCalendarWidget: React.FC<AcademicCalendarWidgetProps> = ({
   onViewNotice,
   onViewDoc,
   defaultExpanded = true,
+  translationEnabled = false,
 }) => {
   const today = useMemo(() => new Date(), []);
   const todayKey = useMemo(() => {
@@ -255,7 +258,7 @@ export const AcademicCalendarWidget: React.FC<AcademicCalendarWidgetProps> = ({
 
     // 3. Process live Documents from DB
     for (const doc of documents) {
-      const rawDate = (doc as any).actionRequiredDate || (doc.category === 'Exams' || doc.category === 'Academic' ? doc.publishedDate : undefined);
+      const rawDate = doc.actionRequiredDate || (doc.category === 'Exams' ? doc.publishedDate : undefined);
       const key = parseDateToKey(rawDate);
       if (key) {
         const cleanTitle = doc.title.replace(/^([📢🎉📅]\s*)+/, '').trim();
@@ -412,6 +415,10 @@ export const AcademicCalendarWidget: React.FC<AcademicCalendarWidgetProps> = ({
             <p className="text-[11px] text-[#707974]">
               Real-time schedule of exams, events, holidays, and academic milestones
             </p>
+            <SectionTranslation
+              text="Academic and Events Calendar. Real-time schedule of exams, events, holidays, and academic milestones."
+              enabled={translationEnabled}
+            />
           </div>
         </div>
 
@@ -683,6 +690,10 @@ export const AcademicCalendarWidget: React.FC<AcademicCalendarWidgetProps> = ({
                       <p className="text-xs text-[#5a6672] leading-relaxed mb-3">
                         {ev.summary}
                       </p>
+                      <SectionTranslation
+                        text={`${ev.title}\n${ev.summary}`}
+                        enabled={translationEnabled}
+                      />
 
                       {/* Interactive Action Shortcuts */}
                       <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[#bfc9c3]/20">

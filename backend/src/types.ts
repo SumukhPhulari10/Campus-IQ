@@ -107,7 +107,7 @@ export interface CollegeDocument {
   section?: string;
   uploadedBy?: string;
   actionRequiredDate?: string;
-  targetBucket?: 'dashboard' | 'ai_bucket';
+  targetBucket?: 'dashboard' | 'ai_bucket' | 'student_guide';
   createdAt?: string;
 }
 
