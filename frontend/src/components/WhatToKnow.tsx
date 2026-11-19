@@ -65,7 +65,7 @@ const TOPICS: Topic[] = [
     icon: 'fact_check',
     accent: 'from-violet-500 to-purple-700',
     description: 'Find official attendance policies and notices that explain what students should do.',
-    keywords: /attendance|condonation|shortage of attendance|attendance requirement/i,
+    keywords: /attendance|condonation|shortage of attendance|attendance requirement|academic requirements|subject-wise attendance|overall attendance/i,
   },
   {
     id: 'fees',
@@ -91,6 +91,18 @@ function isRelevantDepartment(department: string | undefined, studentDepartment:
   return value === studentDepartment || value.includes(studentDepartment) || studentDepartment.includes(value);
 }
 
+function isAttendanceRuleContent(title: string, summary: string): boolean {
+  const combined = `${title} ${summary}`.toLowerCase();
+
+  const hasAttendanceKeyword = /(overall attendance|subject-wise attendance|attendance rules|attendance rule|attendance policy|attendance requirements|minimum attendance|medical leave|unit test attendance|practical attendance|assignment submission|academic discipline)/i.test(combined);
+  const hasAcademicRuleKeyword = /(rule|rules|policy|requirement|requirements|minimum|semester|academic|discipline|deadline|examination eligibility|subject-wise)/i.test(combined);
+  const isDefaulterReport = /(?:^|\s)(?:defaulter|attendance list|attendance sheet|attendance status|defaulter list)(?:\s|$)/i.test(title) && !/(rules|requirements|policy|discipline|minimum attendance)/i.test(combined);
+
+  if (isDefaulterReport) return false;
+
+  return hasAttendanceKeyword && hasAcademicRuleKeyword;
+}
+
 function getTopicSources(topic: Topic, documents: CollegeDocument[], notices: Notice[]): TopicSource[] {
   if (['subjects', 'exams'].includes(topic.id)) return [];
 
@@ -100,7 +112,11 @@ function getTopicSources(topic: Topic, documents: CollegeDocument[], notices: No
   for (const document of documents) {
     if (topic.id === 'attendance' && /academic\s+calend[ae]r/i.test(document.title)) continue;
     const text = `${document.title} ${document.category} ${document.summary} ${document.contentRaw}`;
-    if (!topic.keywords.test(text)) continue;
+    if (topic.id === 'attendance') {
+      if (!isAttendanceRuleContent(document.title, text)) continue;
+    } else if (!topic.keywords.test(text)) {
+      continue;
+    }
     if (topic.id === 'fees' && !(
       document.category === 'Financial Aid' ||
       /fee structure|tuition fee|total payable fees/i.test(text)
@@ -121,7 +137,11 @@ function getTopicSources(topic: Topic, documents: CollegeDocument[], notices: No
   for (const notice of notices) {
     if (topic.id === 'attendance' && /academic\s+calend[ae]r/i.test(notice.title)) continue;
     const text = `${notice.title} ${notice.category} ${notice.aiSummary} ${notice.fullContent}`;
-    if (!topic.keywords.test(text)) continue;
+    if (topic.id === 'attendance') {
+      if (!isAttendanceRuleContent(notice.title, text)) continue;
+    } else if (!topic.keywords.test(text)) {
+      continue;
+    }
     if (topic.id === 'fees' && !/fee structure|tuition fee|total payable fees/i.test(text)) continue;
     const id = `notice:${notice.id}`;
     if (seen.has(id)) continue;

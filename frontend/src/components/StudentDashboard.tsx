@@ -215,6 +215,11 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
     [allDocs],
   );
 
+  const activeDocs = React.useMemo(
+    () => dashboardDocs.filter(document => !isDatePast(document.actionRequiredDate)),
+    [dashboardDocs],
+  );
+
   // Resolve schedule dynamically from uploaded documents, falling back to CSE_B_WEEKLY_SCHEDULE
   const currentSchedule = React.useMemo(() => {
     const resolved = resolveScheduleFromDocs(dashboardDocs);
@@ -248,8 +253,9 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
     return res;
   }, [currentSchedule]);
 
-  // Recently uploaded docs (last 5) — exclude timetable PDFs so they don't duplicate on top and stay low in notices
-  const recentDocs = dashboardDocs.filter(d => !isTimetableDoc(d)).slice(0, 5);
+  // Only documents still active for the students should count as live.
+  const recentDocs = activeDocs.filter(d => !isTimetableDoc(d)).slice(0, 5);
+  const liveDocs = recentDocs;
 
   const getCategoryIcon = (cat: string) => {
     switch (cat) {
@@ -366,11 +372,11 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 Central Information Hub
               </h2>
               <SectionTranslation text="Central Information Hub" enabled={translationEnabled} />
-              {!docsLoading && dashboardDocs.length > 0 && (
+              {!docsLoading && liveDocs.length > 0 && (
                 <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-[#003527]
                                  bg-[#b0f0d6]/35 px-3 py-1 rounded-full border border-[#80bea6]/40">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#003527] animate-pulse" />
-                  Live · {dashboardDocs.length} documents
+                  Live · {liveDocs.length} documents
                 </span>
               )}
             </div>
@@ -570,7 +576,7 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
                 const filtered = notices;
                 const today = new Date(); today.setHours(0, 0, 0, 0);
                 const freshNotices = filtered.filter(n => {
-                  // Hide if action/deadline date has passed
+                  // Only active notices should appear in the live dashboard.
                   if (isDatePast(n.actionRequiredDate)) return false;
                   // Hide stale event/exam/timetable notices (published > 30 days ago)
                   const isTimeboxed = n.category === 'Events' || n.category === 'Exams' ||
