@@ -120,7 +120,7 @@ API_URL=http://localhost:3000
 FRONTEND_URL=http://localhost:5173
 
 DEMO_ADMIN_NAME=CampusIQ Administrator
-DEMO_ADMIN_EMAIL=admin@campusiq.local
+DEMO_ADMIN_EMAIL=admin email
 DEMO_ADMIN_PASSWORD=replace_with_a_secure_password
 
 SMTP_HOST=smtp.gmail.com
@@ -308,7 +308,7 @@ Migration and setup scripts are located in `backend/sql/`.
 6. Open a pull request.
 
 ## Author
-
+Omkar Solanke
 Sumukh Phulari
 
 ## Repository
